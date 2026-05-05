@@ -153,6 +153,26 @@ if (-not $SkipPlaywright) {
     Invoke-ExternalCommand -Executable $VenvPython -Arguments @("-m", "playwright", "install", "chromium") -ErrorMessage "Failed to install Playwright Chromium."
 }
 
+# Add .venv\Scripts to the current user's PATH (persistent, user scope)
+$VenvScripts = Join-Path $VenvDir "Scripts"
+$CurrentUserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+if ($CurrentUserPath -notlike "*$VenvScripts*") {
+    Write-Log "Adding $VenvScripts to user PATH"
+    [System.Environment]::SetEnvironmentVariable(
+        "PATH",
+        "$VenvScripts;$CurrentUserPath",
+        "User"
+    )
+    # Also update PATH for the current session so sjtu-agent works immediately
+    $env:PATH = "$VenvScripts;$env:PATH"
+    Write-Host ""
+    Write-Host "Added to PATH: $VenvScripts"
+    Write-Host "(Effective immediately in this session; new terminals will also pick it up.)"
+} else {
+    Write-Host ""
+    Write-Host "$VenvScripts is already in PATH."
+}
+
 if (-not $NoSetup) {
     Write-Log "Launching sjtu-agent setup"
     & $VenvPython -m sjtu_agent setup
@@ -162,7 +182,7 @@ if (-not $NoSetup) {
 Write-Host ""
 Write-Host "Installation complete."
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  .\.venv\Scripts\Activate.ps1"
-Write-Host "  python -m sjtu_agent setup"
-Write-Host "  python -m sjtu_agent"
+Write-Host "You can now run sjtu-agent directly (no need to activate the venv):"
+Write-Host "  sjtu-agent"
+Write-Host "  sjtu-agent setup"
+Write-Host "  sjtu-agent update"
