@@ -334,5 +334,16 @@ if __name__ == "__main__":
     me = bot.get_me()
     print(f"✅ @{me.username} 已启动")
     print(f"   白名单：{ALLOWED_IDS or '(未设置)'}")
+
+    # 向 Telegram 服务器注册命令列表，用户输入 / 时会弹出自动补全菜单
+    from telebot.types import BotCommand
+    bot.set_my_commands([
+        BotCommand("report",    "📊 立即生成今日学习日报"),
+        BotCommand("reminders", "📌 查看提醒事项列表"),
+        BotCommand("reset",     "🔄 重置对话历史"),
+        BotCommand("id",        "🔑 显示我的 chat_id"),
+        BotCommand("help",      "❓ 帮助与命令列表"),
+    ])
+    print("   已注册 5 条命令（/report /reminders /reset /id /help）")
     print(f"   等待消息… （Ctrl+C 停止）")
     bot.infinity_polling(timeout=30, long_polling_timeout=30)
