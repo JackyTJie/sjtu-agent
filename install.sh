@@ -102,17 +102,51 @@ if [[ $INSTALL_PLAYWRIGHT -eq 1 ]]; then
   "$VENV_PY" -m playwright install chromium
 fi
 
+# ── 将 .venv/bin 加入 PATH（写入 shell rc 文件）──────────────────────────────
+VENV_BIN="$VENV_DIR/bin"
+EXPORT_LINE="export PATH=\"$VENV_BIN:\$PATH\"  # sjtu-agent"
+
+add_to_shell_rc() {
+  local rc="$1"
+  if [[ -f "$rc" ]] && grep -qF "sjtu-agent" "$rc" 2>/dev/null; then
+    log "PATH 设置已存在于 $rc，跳过"
+    return
+  fi
+  printf '\n# Added by sjtu-agent install.sh\n%s\n' "$EXPORT_LINE" >> "$rc"
+  log "已将 .venv/bin 加入 PATH → $rc"
+}
+
+ADDED_TO_RC=0
+if [[ -f "$HOME/.zshrc" ]]; then
+  add_to_shell_rc "$HOME/.zshrc"
+  ADDED_TO_RC=1
+fi
+if [[ -f "$HOME/.bash_profile" ]]; then
+  add_to_shell_rc "$HOME/.bash_profile"
+  ADDED_TO_RC=1
+elif [[ -f "$HOME/.bashrc" ]]; then
+  add_to_shell_rc "$HOME/.bashrc"
+  ADDED_TO_RC=1
+fi
+if [[ $ADDED_TO_RC -eq 0 ]]; then
+  log "未找到 ~/.zshrc / ~/.bash_profile，请手动将以下行添加到你的 shell 配置文件："
+  echo "  $EXPORT_LINE"
+fi
+
 if [[ $RUN_SETUP -eq 1 ]]; then
   log "启动 sjtu-agent setup"
-  exec "$VENV_PY" -m sjtu_agent setup
+  exec "$VENV_BIN/sjtu-agent" setup
 fi
 
 cat <<EOF
 
 安装完成。
 
-后续常用命令：
-  source "$VENV_DIR/bin/activate"
-  python -m sjtu_agent setup
-  python -m sjtu_agent
+新开一个终端（或运行 source ~/.zshrc）后，直接输入：
+  sjtu-agent         # 启动主对话
+  sjtu-agent setup   # 重新配置
+  sjtu-agent doctor  # 检查环境状态
+
+如果当前终端想立即使用，运行：
+  export PATH="$VENV_BIN:\$PATH"
 EOF

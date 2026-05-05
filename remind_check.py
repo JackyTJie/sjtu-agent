@@ -114,7 +114,12 @@ def _open_url(url: str) -> None:
     if not url:
         return
     try:
-        subprocess.run(["open", url], check=True, capture_output=True, timeout=5)
+        if sys.platform == "darwin":
+            subprocess.run(["open", url], check=True, capture_output=True, timeout=5)
+        elif sys.platform == "win32":
+            subprocess.run(["start", url], shell=True, timeout=5)
+        else:
+            subprocess.run(["xdg-open", url], check=True, capture_output=True, timeout=5)
     except Exception as e:
         _log(f"打开 URL 失败: {url} ({e})")
 
@@ -193,23 +198,49 @@ def _check_deadline_guard(state: dict, test_mode: bool = False) -> bool:
 
 
 def _send_notification(title: str, subtitle: str, body: str) -> None:
-    """同时推送 macOS 系统通知 + Telegram 消息（若已配置）。"""
-    # ── macOS 系统通知 ────────────────────────────────────────────────────
-    def esc(s: str) -> str:
-        return s.replace("\\", "\\\\").replace('"', '\\"')
-
-    script = (
-        f'display notification "{esc(body)}" '
-        f'with title "{esc(title)}" '
-        f'subtitle "{esc(subtitle)}"'
-    )
+    """同时推送系统通知 + Telegram 消息（若已配置）。支持 macOS / Windows / Linux。"""
+    # ── 跨平台系统通知 ────────────────────────────────────────────────────
+    message = f"{subtitle}\n{body}" if body else subtitle
     try:
-        subprocess.run(
-            ["osascript", "-e", script],
-            check=True, capture_output=True, timeout=5,
+        from plyer import notification as _plyer_notif  # type: ignore
+        _plyer_notif.notify(
+            title=title,
+            message=message,
+            app_name="SJTU Agent",
+            timeout=10,
         )
-    except Exception as e:
-        _log(f"macOS 通知发送失败: {e}")
+    except Exception:
+        # plyer 不可用时，降级到各平台原生方式
+        try:
+            if sys.platform == "darwin":
+                def esc(s: str) -> str:
+                    return s.replace("\\", "\\\\").replace('"', '\\"')
+                script = (
+                    f'display notification "{esc(body)}" '
+                    f'with title "{esc(title)}" '
+                    f'subtitle "{esc(subtitle)}"'
+                )
+                subprocess.run(["osascript", "-e", script],
+                               check=True, capture_output=True, timeout=5)
+            elif sys.platform == "win32":
+                # Windows 10+ 内置 PowerShell 通知（不依赖第三方库）
+                ps_script = (
+                    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+                    "ContentType = WindowsRuntime] | Out-Null; "
+                    "$template = [Windows.UI.Notifications.ToastNotificationManager]"
+                    "::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+                    f'$template.GetElementsByTagName("text")[0].AppendChild($template.CreateTextNode("{title}")) | Out-Null; '
+                    f'$template.GetElementsByTagName("text")[1].AppendChild($template.CreateTextNode("{message}")) | Out-Null; '
+                    "$toast = [Windows.UI.Notifications.ToastNotification]::new($template); "
+                    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('SJTU Agent').Show($toast)"
+                )
+                subprocess.run(["powershell", "-Command", ps_script],
+                               capture_output=True, timeout=10)
+            else:
+                subprocess.run(["notify-send", title, message],
+                               check=True, capture_output=True, timeout=5)
+        except Exception as e:
+            _log(f"系统通知发送失败: {e}")
 
     # ── Telegram 推送 ─────────────────────────────────────────────────────
     try:

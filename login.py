@@ -144,7 +144,9 @@ def _solve_captcha(img_bytes: bytes) -> str:
     try:
         if platform.system() == "Darwin":
             subprocess.Popen(["open", tmp])
-        elif platform.system() == "Linux":
+        elif platform.system() == "Windows":
+            os.startfile(tmp)
+        else:
             subprocess.Popen(["xdg-open", tmp])
     except Exception:
         pass

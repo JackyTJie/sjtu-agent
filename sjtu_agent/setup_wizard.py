@@ -10,12 +10,20 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from sjtu_agent.launchd import (
-    DEFAULT_LAUNCH_AGENTS_DIR,
+from sjtu_agent.scheduler import (
     available_service_names,
-    build_launch_agent_specs,
-    install_launch_agents,
+    install_daemons,
 )
+# macOS launchd 专属功能（plist 状态查询）按需导入
+def _get_launchd_state_checker():
+    """延迟导入 macOS launchd 状态查询，在非 macOS 平台返回 None。"""
+    if sys.platform == "darwin":
+        try:
+            from sjtu_agent.scheduler.launchd import status as _launchd_status
+            return _launchd_status
+        except ImportError:
+            pass
+    return None
 from sjtu_agent.paths import AGENT_CONFIG_PATH, CONFIG_PATH, ENV_PATH, describe_runtime_paths
 from sjtu_agent.terminal_ui import print_bullets, print_json, print_key_value, print_markdown_message, print_rule, print_status
 
@@ -138,6 +146,48 @@ def _cli_agent_updates(args: argparse.Namespace) -> dict[str, str]:
         "api_key": args.llm_api_key or "",
         "model": args.llm_model or "",
     }
+
+
+def _test_llm_connection(base_url: str, api_key: str, model: str) -> tuple[bool, str]:
+    """
+    发一条极短的请求验证 LLM API 是否可用。
+    返回 (ok, error_message)；ok=True 表示连通。
+    """
+    import os as _os
+    # 确保 base_url 有协议头
+    _url = base_url.strip().rstrip("/")
+    if _url and not _url.startswith(("http://", "https://")):
+        return False, f"Base URL 格式不正确（缺少 http:// 或 https://）：{_url!r}"
+    if not api_key.strip():
+        return False, "API Key 为空"
+    if not model.strip():
+        return False, "模型名称为空"
+
+    try:
+        from openai import OpenAI as _OpenAI
+        _client = _OpenAI(
+            api_key=api_key.strip(),
+            base_url=_url or None,
+        )
+        _client.chat.completions.create(
+            model=model.strip(),
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+            timeout=15,
+        )
+        return True, ""
+    except Exception as e:
+        err = str(e)
+        # 简化常见错误信息
+        if "Connection error" in err or "UnsupportedProtocol" in err or "missing an 'http" in err:
+            return False, f"无法连接到 API（{_url or 'openai 官方'}），请检查 Base URL 是否正确"
+        if "401" in err or "Unauthorized" in err or "Invalid API key" in err.lower() or "authentication" in err.lower():
+            return False, "API Key 无效或已失效，请重新检查"
+        if "404" in err and "model" in err.lower():
+            return False, f"模型 {model!r} 不存在，请检查模型名称"
+        if "timeout" in err.lower() or "timed out" in err.lower():
+            return False, f"连接超时（15s），请检查网络或 Base URL"
+        return False, f"API 测试失败：{err[:200]}"
 
 
 def _apply_agent_config_updates(updates: dict[str, str]) -> dict[str, str] | None:
@@ -324,64 +374,72 @@ def _ready_for_daemons(status: dict) -> bool:
     return status["config_file_exists"] and has_runtime_inputs
 
 
-def _install_launchd(args: argparse.Namespace) -> dict[str, object]:
-    return install_launch_agents(
-        output_dir=Path(args.output_dir),
+def _install_background_services(args: argparse.Namespace) -> dict[str, object]:
+    """跨平台安装后台服务，调用统一调度层。"""
+    platform_kwargs: dict = {}
+    if hasattr(args, "output_dir") and args.output_dir:
+        platform_kwargs["output_dir"] = Path(args.output_dir)
+    if hasattr(args, "telegram_throttle"):
+        platform_kwargs["telegram_throttle"] = args.telegram_throttle
+    return install_daemons(
         service_names=tuple(args.services) if args.services else None,
         python_executable=Path(args.python_executable),
         daily_report_time=args.daily_report_time,
         remind_interval=args.remind_interval,
-        telegram_throttle=args.telegram_throttle,
         load=not args.write_daemons_only,
+        **platform_kwargs,
     )
 
 
-def _launchd_state(args: argparse.Namespace) -> dict[str, object]:
-    output_dir = Path(args.output_dir).expanduser().resolve()
-    selected = set(args.services or available_service_names())
-    services = []
-    for spec in build_launch_agent_specs(
-        daily_report_time=args.daily_report_time,
-        remind_interval=args.remind_interval,
-        telegram_throttle=args.telegram_throttle,
-    ):
-        if spec.name not in selected:
-            continue
-        plist_path = output_dir / spec.plist_name
-        services.append(
-            {
-                "name": spec.name,
-                "label": spec.label,
-                "plist_path": str(plist_path),
-                "exists": plist_path.exists(),
-            }
-        )
+def _daemon_state(args: argparse.Namespace) -> dict[str, object]:
+    """查询当前平台后台服务安装状态。"""
+    from sjtu_agent.scheduler import daemon_status
+    platform_kwargs: dict = {}
+    if hasattr(args, "output_dir") and args.output_dir:
+        platform_kwargs["output_dir"] = Path(args.output_dir)
+    result = daemon_status(
+        service_names=tuple(args.services) if args.services else None,
+        **platform_kwargs,
+    )
+    services = result.get("services", [])
     return {
         "services": services,
-        "existing": [item for item in services if item["exists"]],
-        "missing": [item for item in services if not item["exists"]],
-        "all_present": bool(services) and all(item["exists"] for item in services),
+        "existing": [s for s in services if s.get("installed")],
+        "missing":  [s for s in services if not s.get("installed")],
+        "all_present": result.get("all_installed", False),
     }
 
 
-def _maybe_install_launchd(args: argparse.Namespace, status: dict) -> bool:
+# 向后兼容别名（供 SetupConversation 内部使用）
+_install_launchd = _install_background_services
+_launchd_state   = _daemon_state
+
+
+def _maybe_install_background_services(args: argparse.Namespace, status: dict) -> bool:
     if args.skip_launchd:
-        return False
-    if sys.platform != "darwin":
-        print("Skipping launchd installation because this command only supports macOS.")
         return False
 
     ready = _ready_for_daemons(status)
     if not ready:
         print("Background services are not installed yet because the configuration is still incomplete.")
 
-    if not _confirm("Install macOS background services now?", ready, args.assume_yes):
+    platform_label = "macOS background services" if sys.platform == "darwin" else "background services"
+    if not _confirm(f"Install {platform_label} now?", ready, args.assume_yes):
         return False
 
-    payload = _install_launchd(args)
-    print("Installed launchd services into:", payload["output_dir"])
-    for service in payload["services"]:
-        print(f"  - {service['label']} -> {service['plist_path']}")
+    try:
+        payload = _install_background_services(args)
+    except RuntimeError as exc:
+        print(f"Background service installation failed: {exc}")
+        return False
+
+    output_dir = payload.get("output_dir") or payload.get("unit_dir") or ""
+    if output_dir:
+        print(f"Installed background services into: {output_dir}")
+    for service in payload.get("services", []):
+        name = service.get("name") or service.get("task_name") or service.get("unit_name") or ""
+        path = service.get("plist_path") or service.get("service_path") or service.get("task_name") or ""
+        print(f"  - {name} -> {path}")
     return True
 
 
@@ -455,12 +513,8 @@ def _run_automatic_setup(args: argparse.Namespace) -> int:
     else:
         print("\nCore setup looks ready.")
 
-    _print_header("macOS Background Services")
-    try:
-        installed = _maybe_install_launchd(args, status)
-    except RuntimeError as exc:
-        print(f"launchd installation failed: {exc}")
-        return 1
+    _print_header("Background Services")
+    installed = _maybe_install_background_services(args, status)
     if not installed:
         print("Background services were not changed.")
 
@@ -652,6 +706,15 @@ class SetupConversation:
                 return True
             self.say(f"最后输入模型名。直接回车就用默认值：{model_default}")
             model = input("Model: ").strip() or model_default
+
+            # ── 保存前先测试连通性 ──────────────────────────────────────────
+            self.say("正在测试 API 连接，请稍候…")
+            ok, err_msg = _test_llm_connection(base_url, api_key, model)
+            if not ok:
+                self.say(f"⚠️  连接测试失败：{err_msg}")
+                self.say("请检查 Base URL、API Key 或模型名，然后重新输入；或者回复 skip 先跳过。")
+                continue   # 重新从 base_url 开始
+
             saved = _apply_agent_config_updates(
                 {
                     "base_url": base_url,
@@ -659,7 +722,7 @@ class SetupConversation:
                     "model": model,
                 }
             )
-            self.say(f"已保存 Agent 模型配置：{saved['model']} @ {saved['base_url']}。")
+            self.say(f"✅ 连接测试通过，已保存 Agent 模型配置：{saved['model']} @ {saved['base_url']}。")
             self.say("现在你已经具备完整 agent 对话能力了；这个 setup 也会继续帮你把校园平台配置补齐。")
             return True
 
@@ -1023,8 +1086,8 @@ def register_setup_parser(subparsers: argparse._SubParsersAction[argparse.Argume
     )
     parser.add_argument(
         "--output-dir",
-        default=str(DEFAULT_LAUNCH_AGENTS_DIR),
-        help="directory where launchd plist files will be written",
+        default=None,
+        help="directory where service files will be written (default: platform standard path)",
     )
     parser.add_argument(
         "--python-executable",

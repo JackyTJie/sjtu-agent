@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from sjtu_agent import __version__
-from sjtu_agent.launchd import DEFAULT_LAUNCH_AGENTS_DIR, available_service_names, install_launch_agents
 from sjtu_agent.paths import describe_runtime_paths
+from sjtu_agent.scheduler import available_service_names, current_platform_name, install_daemons
 from sjtu_agent.setup_wizard import register_setup_parser
 from sjtu_agent.terminal_ui import print_json
 
@@ -35,6 +35,63 @@ def _cmd_doctor(_: argparse.Namespace) -> int:
         "setup": agent.tool_check_setup(),
     }
     print_json(payload)
+    return 0
+
+
+def _cmd_update(args: argparse.Namespace) -> int:
+    """拉取最新代码并重装包，可选更新 Playwright Chromium。"""
+    import subprocess
+    import shutil
+    from sjtu_agent.paths import PROJECT_ROOT
+
+    pip = Path(sys.executable).parent / "pip"
+    if not pip.exists():
+        pip = Path(sys.executable).parent / "pip3"
+
+    print(f"[sjtu-agent update] 当前版本：{__version__}")
+    print(f"[sjtu-agent update] 项目目录：{PROJECT_ROOT}")
+
+    # ── 1. git pull ────────────────────────────────────────────────────────
+    if not args.skip_git:
+        git = shutil.which("git")
+        if not git:
+            print("[sjtu-agent update] ⚠️  未找到 git，跳过代码更新")
+        else:
+            print("[sjtu-agent update] 正在 git pull…")
+            result = subprocess.run(
+                [git, "pull", "--ff-only"],
+                cwd=str(PROJECT_ROOT),
+                capture_output=False,
+            )
+            if result.returncode != 0:
+                print("[sjtu-agent update] ⚠️  git pull 失败，请手动解决冲突后重试")
+                return 1
+
+    # ── 2. pip install -e . ────────────────────────────────────────────────
+    print("[sjtu-agent update] 正在重新安装依赖…")
+    pip_cmd = [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "--quiet"]
+    if args.upgrade_deps:
+        pip_cmd.append("--upgrade")
+    result = subprocess.run(pip_cmd)
+    if result.returncode != 0:
+        print("[sjtu-agent update] ⚠️  依赖安装失败")
+        return 1
+
+    # ── 3. 可选：更新 Playwright Chromium ─────────────────────────────────
+    if args.update_playwright:
+        print("[sjtu-agent update] 正在更新 Playwright Chromium…")
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+
+    # ── 4. 打印新版本 ────────────────────────────────────────────────────
+    # 重新导入以获取更新后的版本号
+    try:
+        import importlib
+        import sjtu_agent as _pkg
+        importlib.reload(_pkg)
+        new_version = _pkg.__version__
+    except Exception:
+        new_version = "（重新打开终端后生效）"
+    print(f"[sjtu-agent update] ✅ 更新完成！新版本：{new_version}")
     return 0
 
 
@@ -84,14 +141,20 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
 
 def _cmd_install_daemons(args: argparse.Namespace) -> int:
     try:
-        payload = install_launch_agents(
-            output_dir=Path(args.output_dir),
+        # 构建平台专属参数（macOS 支持自定义 output_dir 和 telegram_throttle）
+        platform_kwargs: dict = {}
+        if hasattr(args, "output_dir") and args.output_dir:
+            platform_kwargs["output_dir"] = Path(args.output_dir)
+        if hasattr(args, "telegram_throttle"):
+            platform_kwargs["telegram_throttle"] = args.telegram_throttle
+
+        payload = install_daemons(
             service_names=tuple(args.services) if args.services else None,
             python_executable=Path(args.python_executable),
             daily_report_time=args.daily_report_time,
             remind_interval=args.remind_interval,
-            telegram_throttle=args.telegram_throttle,
             load=not args.write_only,
+            **platform_kwargs,
         )
     except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
@@ -127,53 +190,75 @@ def build_parser() -> argparse.ArgumentParser:
     _add_passthrough_parser(subparsers, "remind-check", "run the reminder daemon once", _cmd_remind_check)
     _add_passthrough_parser(subparsers, "mcp", "start the MCP server", _cmd_mcp)
 
-    install_daemons = subparsers.add_parser(
+    _platform_name = current_platform_name()
+    install_daemons_parser = subparsers.add_parser(
         "install-daemons",
-        help="generate launchd plists and load them into the current macOS user session",
+        help=f"install background services for the current platform ({_platform_name})",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--output-dir",
-        default=str(DEFAULT_LAUNCH_AGENTS_DIR),
-        help="directory where plist files will be written",
+        default=None,
+        help="(macOS/Linux) directory where service files will be written (default: platform standard path)",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--write-only",
         action="store_true",
-        help="only write plist files; do not call launchctl",
+        help="only write service files; do not load/register them",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--python-executable",
         default=sys.executable,
-        help="python executable that launchd should use",
+        help="python executable that background services should use",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--services",
         nargs="+",
         choices=available_service_names(),
-        help="subset of launchd services to generate",
+        help="subset of services to install",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--daily-report-time",
         type=_parse_hhmm,
         default=(22, 0),
         help="daily report schedule in HH:MM, default 22:00",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--remind-interval",
         type=int,
         default=60,
         help="reminder daemon interval in seconds, default 60",
     )
-    install_daemons.add_argument(
+    install_daemons_parser.add_argument(
         "--telegram-throttle",
         type=int,
         default=10,
-        help="launchd throttle interval for telegram bot restarts, default 10",
+        help="(macOS) launchd throttle interval for telegram bot restarts, default 10",
     )
-    install_daemons.set_defaults(func=_cmd_install_daemons)
+    install_daemons_parser.set_defaults(func=_cmd_install_daemons)
 
     doctor = subparsers.add_parser("doctor", help="print runtime paths and setup status")
     doctor.set_defaults(func=_cmd_doctor)
+
+    update_parser = subparsers.add_parser(
+        "update",
+        help="pull latest code from git and reinstall the package",
+    )
+    update_parser.add_argument(
+        "--skip-git",
+        action="store_true",
+        help="skip git pull (only reinstall dependencies)",
+    )
+    update_parser.add_argument(
+        "--upgrade-deps",
+        action="store_true",
+        help="also upgrade all Python dependencies to their latest versions",
+    )
+    update_parser.add_argument(
+        "--update-playwright",
+        action="store_true",
+        help="also update Playwright Chromium browser",
+    )
+    update_parser.set_defaults(func=_cmd_update)
 
     return parser
 

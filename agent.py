@@ -1617,21 +1617,94 @@ def tool_login_platform(platform: str) -> dict:
 
 
 
-# DDL 缓存：{key -> (timestamp, result)}，5 分钟内重复查询直接返回缓存
-_DDL_CACHE: dict[str, tuple[float, list]] = {}
-_DDL_CACHE_TTL = 300  # 秒
+# ── DDL 持久磁盘缓存 ─────────────────────────────────────────────────────────
+# 缓存文件存放在 DATA_DIR/.ddl_cache.json，进程重启后依然有效。
+# TTL = 15 分钟（900 秒）；若缓存命中则直接返回，避免每次都发起网络请求。
+
+from sjtu_agent.paths import DDL_CACHE_PATH as _DDL_CACHE_PATH
+
+_DDL_CACHE_TTL = 900  # 秒（15 分钟）
+
+
+def _ddl_cache_load() -> dict:
+    """从磁盘读取缓存，返回 {cache_key: {"ts": float, "data": list}} 字典。"""
+    try:
+        if _DDL_CACHE_PATH.exists():
+            import json as _json
+            return _json.loads(_DDL_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _ddl_cache_save(store: dict) -> None:
+    """将缓存字典写入磁盘。"""
+    try:
+        import json as _json
+        _DDL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DDL_CACHE_PATH.write_text(
+            _json.dumps(store, ensure_ascii=False, default=str), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _ddl_cache_get(cache_key: str) -> list | None:
+    """从磁盘缓存读取指定 key，若 TTL 未超期则返回数据，否则返回 None。"""
+    import time as _t
+    import datetime as _dt
+    store = _ddl_cache_load()
+    entry = store.get(cache_key)
+    if not entry:
+        return None
+    if _t.time() - entry.get("ts", 0) > _DDL_CACHE_TTL:
+        return None
+    # 反序列化 due 字段（JSON 存为字符串）
+    raw_list = entry.get("data", [])
+    result = []
+    for item in raw_list:
+        item = dict(item)
+        if isinstance(item.get("due"), str):
+            try:
+                item["due"] = _dt.datetime.fromisoformat(item["due"])
+            except Exception:
+                pass
+        if isinstance(item.get("dt"), str):
+            try:
+                item["dt"] = _dt.datetime.fromisoformat(item["dt"])
+            except Exception:
+                pass
+        result.append(item)
+    return result
+
+
+def _ddl_cache_set(cache_key: str, data: list) -> None:
+    """将 data 写入磁盘缓存（datetime 自动序列化为 ISO 格式字符串）。"""
+    import time as _t
+    import datetime as _dt
+
+    def _serialize(obj):
+        if isinstance(obj, _dt.datetime):
+            return obj.isoformat()
+        return str(obj)
+
+    store = _ddl_cache_load()
+    import json as _json
+    serializable = _json.loads(_json.dumps(data, default=_serialize))
+    store[cache_key] = {"ts": _t.time(), "data": serializable}
+    _ddl_cache_save(store)
 
 
 def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_icourse=False) -> list:
-    """并行拉取各平台 DDL，返回合并列表（未排序）。"""
+    """并行拉取各平台 DDL，返回合并列表（未排序）。
+    优先使用 15 分钟内的磁盘缓存，缓存命中时无需发起任何网络请求。
+    """
     import concurrent.futures as _cf
-    import time as _t
 
     cache_key = f"{skip_canvas},{skip_aihaoke},{skip_icourse}"
-    if cache_key in _DDL_CACHE:
-        ts, cached = _DDL_CACHE[cache_key]
-        if _t.time() - ts < _DDL_CACHE_TTL:
-            return cached
+    cached = _ddl_cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     tasks = []
     if not skip_canvas:   tasks.append(("canvas",  lambda: dc.fetch_canvas(cfg)))
@@ -1650,8 +1723,37 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
             except Exception as e:
                 print(f"[DDL] {futures[fut]} 拉取失败：{e}")
 
-    _DDL_CACHE[cache_key] = (_t.time(), all_ddl)
+    _ddl_cache_set(cache_key, all_ddl)
     return all_ddl
+
+
+def _prefetch_ddls_background() -> None:
+    """在独立子进程中静默预热 DDL 缓存，不阻塞主进程，不向终端输出任何内容。
+    子进程的 stdout/stderr 统一重定向到 devnull，完全不干扰主进程终端。
+    """
+    import subprocess as _sp
+    import sys as _sys
+    import os as _os
+
+    cached = _ddl_cache_get("False,False,False")
+    if cached is not None:
+        return  # 缓存仍有效，无需预热
+
+    # 用 -c 片段在子进程里静默执行拉取
+    _script = (
+        "import sys, os; sys.path.insert(0, os.path.dirname(sys.argv[0]) or '.'); "
+        "import agent as _a, ddl_checker as _dc; "
+        "_a._fetch_ddls_parallel(_dc.load_config())"
+    )
+    try:
+        _sp.Popen(
+            [_sys.executable, "-c", _script],
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
+            cwd=str(Path(__file__).resolve().parent),
+        )
+    except Exception:
+        pass  # 预热失败不影响主进程
 
 
 def tool_get_ddls(skip_canvas=False, skip_aihaoke=False, skip_icourse=False):
@@ -2439,17 +2541,56 @@ def load_agent_config() -> dict:
     return {}
 
 
+def _test_llm_connection_simple(base_url: str, api_key: str, model: str) -> tuple[bool, str]:
+    """测试 LLM API 连接是否正常。返回 (ok, error_msg)。"""
+    _url = base_url.strip().rstrip("/")
+    if _url and not _url.startswith(("http://", "https://")):
+        return False, f"Base URL 格式不正确（缺少 http:// 或 https://）：{_url!r}"
+    if not api_key.strip():
+        return False, "API Key 为空"
+    try:
+        client = OpenAI(api_key=api_key.strip(), base_url=_url or None)
+        client.chat.completions.create(
+            model=model.strip(),
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+            timeout=15,
+        )
+        return True, ""
+    except Exception as e:
+        err = str(e)
+        if "Connection error" in err or "UnsupportedProtocol" in err or "missing an 'http" in err:
+            return False, f"无法连接到 API（{_url or 'openai 官方'}），请检查 Base URL"
+        if "401" in err or "Unauthorized" in err or "Invalid API key" in err.lower():
+            return False, "API Key 无效或已失效"
+        if "timeout" in err.lower() or "timed out" in err.lower():
+            return False, "连接超时（15s），请检查网络或 Base URL"
+        return False, f"连接失败：{err[:120]}"
+
+
 def setup_agent_config() -> dict:
     print("\n=== SJTU DDL Agent 首次配置 ===")
     print("请填写用于驱动 Agent 的大模型 API 信息")
     print("（支持 DeepSeek、学校超算集群等任意 OpenAI 兼容接口）\n")
-    base_url = input("API Base URL（如 https://api.openai.com/v1，回车使用 OpenAI 官方）: ").strip()
-    api_key  = input("API Key: ").strip()
-    model    = input("模型名称（如 gpt-4.1-mini，回车默认 gpt-4.1-mini）: ").strip()
+
+    while True:
+        base_url = input("API Base URL（如 https://api.openai.com/v1，回车使用 OpenAI 官方）: ").strip()
+        api_key  = input("API Key: ").strip()
+        model    = input("模型名称（如 gpt-4.1-mini，回车默认 gpt-4.1-mini）: ").strip() or "gpt-4.1-mini"
+
+        resolved_url = base_url or "https://api.openai.com/v1"
+        print("正在测试 API 连接，请稍候…", end="", flush=True)
+        ok, err_msg = _test_llm_connection_simple(resolved_url, api_key, model)
+        if ok:
+            print(" ✅ 连接成功")
+            break
+        print(f"\n⚠️  连接测试失败：{err_msg}")
+        print("请重新输入（直接回车可重用上次输入的值）\n")
+
     cfg = {
-        "base_url": base_url or "https://api.openai.com/v1",
+        "base_url": resolved_url,
         "api_key":  api_key,
-        "model":    model or "gpt-4.1-mini",
+        "model":    model,
     }
     AGENT_CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
     print("\nAgent 配置已保存。\n")
@@ -2638,14 +2779,151 @@ def _anthropic_tools() -> list:
     return result
 
 
+def _stream_with_think_tags(stream) -> tuple[str, str, dict]:
+    """
+    消费 OpenAI 兼容的流式响应，处理两种思考格式：
+      1. delta.reasoning_content 字段（DeepSeek-R1 原生）
+      2. <think>...</think> XML 标签混在 content 中（minimax / 部分模型）
+
+    思考内容实时以灰色暗字输出；正文内容缓冲到结束后统一返回（用于 markdown 渲染）。
+
+    返回：(full_content_no_think, full_reasoning, tool_calls_map)
+    """
+    full_content   = ""   # 包含 <think> 的原始正文（用于存入 messages）
+    full_reasoning = ""   # 思考内容（仅用于展示，不存入 messages）
+    tool_calls_map: dict[int, dict] = {}
+
+    # 思考状态机
+    STATE_NORMAL  = "normal"
+    STATE_THINK   = "think"    # 在 <think> 块内
+    STATE_PENDING = "pending"  # 可能是 </think> 的前半段
+    state = STATE_NORMAL
+
+    TAG_OPEN  = "<think>"
+    TAG_CLOSE = "</think>"
+    pending_buf = ""   # 暂存可能是 </think> 的片段
+
+    reasoning_started = False
+    _reasoning_newlines = 0   # 思考内容累计换行数，用于流结束后清除
+
+    def _emit_reasoning(text: str):
+        nonlocal reasoning_started, full_reasoning, _reasoning_newlines
+        if not reasoning_started:
+            # 打印前缀，暗灰色
+            sys.stdout.write("\033[2m💭 ")
+            sys.stdout.flush()
+            reasoning_started = True
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        _reasoning_newlines += text.count("\n")
+        full_reasoning += text
+
+    def _clear_reasoning():
+        """清除已打印的思考内容，光标归位到思考开始前的行。"""
+        nonlocal reasoning_started, _reasoning_newlines
+        if not reasoning_started:
+            return
+        sys.stdout.write("\033[0m")   # 重置颜色
+        # 回到行首，然后上移 _reasoning_newlines 行，清除到屏幕底部
+        sys.stdout.write(f"\r\033[{_reasoning_newlines}A\033[J" if _reasoning_newlines > 0 else "\r\033[K")
+        sys.stdout.flush()
+        reasoning_started = False
+        _reasoning_newlines = 0
+
+    def _end_reasoning():
+        nonlocal state, pending_buf
+        _clear_reasoning()
+        state = STATE_NORMAL
+        pending_buf = ""
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta is None:
+            continue
+
+        # ── reasoning_content 字段（DeepSeek-R1 / Qwen 原生）────────────
+        rc = getattr(delta, "reasoning_content", None) or ""
+        if rc:
+            _emit_reasoning(rc)
+
+        # ── content 字段 ────────────────────────────────────────────────
+        text_chunk = delta.content or ""
+        if text_chunk:
+            # reasoning_content 模式：正文出现时清除思考内容
+            if reasoning_started and TAG_OPEN not in text_chunk:
+                _clear_reasoning()
+
+            full_content += text_chunk
+
+            # 状态机处理 <think> / </think>
+            i = 0
+            while i < len(text_chunk):
+                ch = text_chunk[i]
+
+                if state == STATE_NORMAL:
+                    # 检查是否开始 <think>
+                    remain = text_chunk[i:]
+                    if TAG_OPEN in remain:
+                        pos = remain.index(TAG_OPEN)
+                        i += pos + len(TAG_OPEN)
+                        state = STATE_THINK
+                        # pos 前的内容是正文，不需要在这里输出（最终统一渲染）
+                    else:
+                        break  # 本 chunk 剩余都是正文，跳出
+
+                elif state == STATE_THINK:
+                    remain = text_chunk[i:]
+                    if TAG_CLOSE in remain:
+                        pos = remain.index(TAG_CLOSE)
+                        _emit_reasoning(remain[:pos])
+                        i += pos + len(TAG_CLOSE)
+                        _end_reasoning()
+                    else:
+                        _emit_reasoning(remain)
+                        break
+
+                else:
+                    break
+
+        # ── 工具调用 ─────────────────────────────────────────────────────
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                idx = tc_delta.index
+                if idx not in tool_calls_map:
+                    tool_calls_map[idx] = {"id": "", "name": "", "arguments": ""}
+                entry = tool_calls_map[idx]
+                if tc_delta.id:
+                    entry["id"] += tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        entry["name"] += tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        entry["arguments"] += tc_delta.function.arguments
+
+    # 流结束，清理思考显示
+    if reasoning_started:
+        sys.stdout.write("\033[0m\n")
+        sys.stdout.flush()
+
+    # 从 full_content 中剥离 <think>...</think> 块，得到纯正文
+    clean_content = re.sub(r"<think>.*?</think>", "", full_content, flags=re.DOTALL).strip()
+    return clean_content, full_reasoning, tool_calls_map
+
+
 def _run_one_turn_openai(client: OpenAI, model: str, messages: list) -> None:
+    """流式输出版本：
+    - 思考过程（reasoning_content 或 <think> 标签）实时灰色显示
+    - 正文内容流式缓冲，结束后用 print_markdown_message 统一渲染 markdown
+    """
     spinner = Spinner()
+
     while True:
-        spinner.start("思考中…")
+        # ── 流式请求 ────────────────────────────────────────────────────────
+        spinner.start("等待响应…")
         try:
-            response = client.chat.completions.create(
+            stream = client.chat.completions.create(
                 model=model, messages=messages, tools=TOOLS, tool_choice="auto",
-                timeout=180,
+                timeout=180, stream=True,
             )
         except Exception as e:
             spinner.stop()
@@ -2657,17 +2935,47 @@ def _run_one_turn_openai(client: OpenAI, model: str, messages: list) -> None:
                 continue
             raise
         spinner.stop()
-        msg = response.choices[0].message
 
-        if not msg.tool_calls:
-            reply = msg.content or ""
-            if reply:
-                print_markdown_message("Agent", reply)
-            messages.append({"role": "assistant", "content": reply})
+        try:
+            clean_content, _reasoning, tool_calls_map = _stream_with_think_tags(stream)
+        except Exception as e:
+            sys.stdout.write("\033[0m\n")
+            sys.stdout.flush()
+            raise
+
+        # ── 渲染正文（markdown）──────────────────────────────────────────
+        if clean_content:
+            print_markdown_message("Agent", clean_content)
+
+        # ── 纯文本回复（无工具调用）─────────────────────────────────────
+        if not tool_calls_map:
+            messages.append({"role": "assistant", "content": clean_content})
             return
 
-        messages.append(msg)
-        for tc in msg.tool_calls:
+        # ── 有工具调用：构建 assistant 消息并执行 ───────────────────────
+        from openai.types.chat import ChatCompletionMessageToolCall
+        from openai.types.chat.chat_completion_message_tool_call import Function
+        from openai.types.chat import ChatCompletionMessage
+
+        tool_call_objs = []
+        for idx in sorted(tool_calls_map):
+            e = tool_calls_map[idx]
+            tool_call_objs.append(
+                ChatCompletionMessageToolCall(
+                    id=e["id"],
+                    type="function",
+                    function=Function(name=e["name"], arguments=e["arguments"]),
+                )
+            )
+
+        assistant_msg = ChatCompletionMessage(
+            role="assistant",
+            content=clean_content or None,
+            tool_calls=tool_call_objs,
+        )
+        messages.append(assistant_msg)
+
+        for tc in tool_call_objs:
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments or "{}")
             if fn_name not in ("check_setup",):
@@ -2679,18 +2987,18 @@ def _run_one_turn_openai(client: OpenAI, model: str, messages: list) -> None:
 
 
 def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> None:
-    """用 httpx 直接调用 Anthropic Messages API，绕过 SDK 自动添加的 x-stainless-* 请求头。"""
+    """流式调用 Anthropic Messages API（SSE），实时显示 thinking block 和正文。"""
     import httpx as _httpx
+    import json as _json
     spinner = Spinner()
     system = next((m["content"] for m in messages if m["role"] == "system"), "")
     tools  = _anthropic_tools()
 
-    # 从 Anthropic client 对象提取连接信息
     api_key  = client.api_key
     base_url = str(client.base_url).rstrip("/")
     ua       = (client.default_headers or {}).get("user-agent", "claude-cli/1.0.57")
     endpoint = f"{base_url}/v1/messages"
-    headers  = {
+    req_headers = {
         "x-api-key":          api_key,
         "anthropic-version":  "2023-06-01",
         "content-type":       "application/json",
@@ -2699,69 +3007,196 @@ def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> No
 
     while True:
         api_msgs = [m for m in messages if m["role"] != "system"]
-        spinner.start("思考中…")
+        spinner.start("等待响应…")
+
+        # ── SSE 流式请求 ────────────────────────────────────────────────────
+        content_blocks: list[dict] = []     # 最终 assistant 消息内容
+        tool_inputs: dict[int, str] = {}    # block_index -> accumulated JSON str
+        in_thinking = False
+        in_text     = False
+        full_text   = ""
+        error_payload: dict | None = None
+        _anthropic_thinking_started = False  # 是否已开始写屏思考内容
+        _anthropic_thinking_lines   = 0      # 思考内容换行数，用于清除
+
         try:
-            resp = _httpx.post(
-                endpoint,
-                headers=headers,
+            with _httpx.stream(
+                "POST", endpoint,
+                headers=req_headers,
                 json={"model": model, "system": system, "messages": api_msgs,
-                      "tools": tools, "max_tokens": 4096},
+                      "tools": tools, "max_tokens": 4096, "stream": True},
                 timeout=180,
-            )
+            ) as resp:
+                spinner.stop()
+
+                if resp.status_code not in (200,):
+                    body = resp.read().decode()
+                    try:
+                        error_payload = _json.loads(body)
+                    except Exception:
+                        error_payload = {"raw": body}
+                else:
+                    for line in resp.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            ev = _json.loads(data_str)
+                        except Exception:
+                            continue
+
+                        ev_type = ev.get("type", "")
+
+                        # 新 block 开始
+                        if ev_type == "content_block_start":
+                            block = ev.get("content_block", {})
+                            btype = block.get("type", "")
+                            bidx  = ev.get("index", len(content_blocks))
+                            if btype == "thinking":
+                                in_thinking = True
+                                spinner.start("思考中…")  # Spinner 替代，隐藏思维链内容
+                                content_blocks.append({"type": "thinking", "thinking": ""})
+                            elif btype == "text":
+                                # 文字 block 开始时先清除思考内容
+                                if in_thinking:
+                                    if _anthropic_thinking_started:
+                                        # 清除已打印的思考内容
+                                        sys.stdout.write("\033[0m")
+                                        if _anthropic_thinking_lines > 0:
+                                            sys.stdout.write(f"\r\033[{_anthropic_thinking_lines}A\033[J")
+                                        else:
+                                            sys.stdout.write("\r\033[K")
+                                        sys.stdout.flush()
+                                        _anthropic_thinking_started = False
+                                        _anthropic_thinking_lines = 0
+                                    else:
+                                        spinner.stop()
+                                    in_thinking = False
+                                in_text = True
+                                # 正文完整接收后 markdown 渲染，此时只需等待
+                                spinner.start("处理中…")
+                                content_blocks.append({"type": "text", "text": ""})
+                            elif btype == "tool_use":
+                                content_blocks.append({
+                                    "type": "tool_use",
+                                    "id": block.get("id", ""),
+                                    "name": block.get("name", ""),
+                                    "input": {},
+                                })
+                                tool_inputs[bidx] = ""
+
+                        # delta
+                        elif ev_type == "content_block_delta":
+                            delta = ev.get("delta", {})
+                            dtype = delta.get("type", "")
+                            bidx  = ev.get("index", 0)
+
+                            if dtype == "thinking_delta":
+                                chunk = delta.get("thinking", "")
+                                # 实时输出思考内容（灰色暗字）
+                                if in_thinking:
+                                    if not _anthropic_thinking_started:
+                                        spinner.stop()
+                                        sys.stdout.write("\033[2m💭 ")
+                                        sys.stdout.flush()
+                                        _anthropic_thinking_started = True
+                                    sys.stdout.write(chunk)
+                                    sys.stdout.flush()
+                                    _anthropic_thinking_lines += chunk.count("\n")
+                                if content_blocks and content_blocks[-1].get("type") == "thinking":
+                                    content_blocks[-1]["thinking"] += chunk
+
+                            elif dtype == "text_delta":
+                                chunk = delta.get("text", "")
+                                # 只缓冲，不实时输出（等 block 结束后统一 markdown 渲染）
+                                full_text += chunk
+                                if content_blocks and content_blocks[-1].get("type") == "text":
+                                    content_blocks[-1]["text"] += chunk
+
+                            elif dtype == "input_json_delta":
+                                tool_inputs[bidx] = tool_inputs.get(bidx, "") + delta.get("partial_json", "")
+
+                        # block 结束
+                        elif ev_type == "content_block_stop":
+                            bidx = ev.get("index", 0)
+                            # 把累积的 input JSON 解析回 dict
+                            if bidx in tool_inputs and bidx < len(content_blocks):
+                                blk = content_blocks[bidx]
+                                if blk.get("type") == "tool_use":
+                                    try:
+                                        blk["input"] = _json.loads(tool_inputs[bidx] or "{}")
+                                    except Exception:
+                                        blk["input"] = {}
+
+                        elif ev_type == "message_stop":
+                            break
+
+                        elif ev_type == "error":
+                            error_payload = ev.get("error", ev)
+                            break
+
         except (_httpx.ReadTimeout, _httpx.ConnectTimeout, _httpx.TimeoutException) as e:
             spinner.stop()
+            if in_thinking or in_text:
+                sys.stdout.write("\033[0m\n")
+                sys.stdout.flush()
             import time as _time
             print(f"\r[提示] 网络超时，5 秒后重试…（{e}）")
             _time.sleep(5)
             continue
+        except Exception as e:
+            spinner.stop()
+            if in_thinking or in_text:
+                sys.stdout.write("\033[0m\n")
+                sys.stdout.flush()
+            raise
         finally:
             spinner.stop()
 
-        if resp.status_code in (500, 529):
+        # ── 收尾渲染 ──────────────────────────────────────────────────────
+        if in_thinking:
+            spinner.stop()
+            in_thinking = False
+        if in_text and full_text:
+            spinner.stop()  # 停止"处理中…" spinner，再渲染正文
+            print_markdown_message("Agent", full_text)
+        elif in_text:
+            spinner.stop()
+
+        # ── 错误处理 ──────────────────────────────────────────────────────
+        if error_payload:
             import time as _time
-            try:
-                msg = resp.json().get("error", {}).get("message", "")
-            except Exception:
-                msg = resp.text[:200]
-            overloaded = "overload" in msg.lower() or "过载" in msg
-            if overloaded:
+            msg = (error_payload.get("message") or str(error_payload))[:200]
+            if "overload" in msg.lower() or "过载" in msg:
                 print(f"\r[提示] 模型过载，10 秒后重试…")
                 _time.sleep(10)
                 continue
-            raise RuntimeError(f"Anthropic API 错误 {resp.status_code}: {resp.text[:300]}")
-        if resp.status_code != 200:
-            raise RuntimeError(f"Anthropic API 错误 {resp.status_code}: {resp.text[:300]}")
+            if error_payload.get("type") == "invalid_request_error" and "500" in str(error_payload):
+                import time as _time
+                _time.sleep(5)
+                continue
+            raise RuntimeError(f"Anthropic API 错误: {msg}")
 
-        data = resp.json()
-        content_raw = data.get("content", [])
-        has_tool_use = any(b.get("type") == "tool_use" for b in content_raw)
-
-        # 构建 assistant 消息（dict 格式，与 Anthropic 多轮对话兼容）
-        content_blocks = []
-        for b in content_raw:
-            if b.get("type") == "text":
-                content_blocks.append({"type": "text", "text": b["text"]})
-                if not has_tool_use and b["text"]:
-                    print_markdown_message("Agent", b["text"])
-            elif b.get("type") == "tool_use":
-                content_blocks.append({
-                    "type": "tool_use", "id": b["id"],
-                    "name": b["name"], "input": b["input"],
-                })
+        # ── 判断是否有工具调用 ────────────────────────────────────────────
+        has_tool_use = any(b.get("type") == "tool_use" for b in content_blocks)
         messages.append({"role": "assistant", "content": content_blocks})
 
         if not has_tool_use:
             return
 
-        # 执行工具，结果合并为一条 user 消息
+        # ── 执行工具 ──────────────────────────────────────────────────────
         tool_results = []
-        for b in content_raw:
+        for b in content_blocks:
             if b.get("type") != "tool_use":
                 continue
-            if b["name"] not in ("check_setup",):
-                spinner.start(_TOOL_LABELS.get(b["name"], b["name"]) + "…")
-            result = run_tool(b["name"], b["input"])
-            if b["name"] not in ("check_setup",):
+            fn_name = b["name"]
+            fn_args = b["input"] if isinstance(b["input"], dict) else {}
+            if fn_name not in ("check_setup",):
+                spinner.start(_TOOL_LABELS.get(fn_name, fn_name) + "…")
+            result = run_tool(fn_name, fn_args)
+            if fn_name not in ("check_setup",):
                 spinner.stop()
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"], "content": result})
         messages.append({"role": "user", "content": tool_results})
@@ -2810,6 +3245,9 @@ def chat_loop(client, model: str):
     messages = [{"role": "system", "content": SYSTEM_PROMPT + _date_ctx}]
     model_box  = [model]   # 用列表包裹使内部可修改
     client_box = [client]  # 同理，切换模型时可替换 client
+
+    # ── 启动时后台预热 DDL 缓存（不阻塞主线程）────────────────────────────────
+    _prefetch_ddls_background()
 
     # ── 启动检查：直接调本地函数，无需 LLM roundtrip ─────────────────────────
     print("正在检查配置状态…", flush=True)
