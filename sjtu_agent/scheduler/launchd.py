@@ -40,6 +40,14 @@ _SERVICE_SPECS = {
         "schedule_type": "none",
         "keep_alive": True,
     },
+    "wechat-bot": {
+        "label": "com.sjtu.wechat-bot",
+        "subcommand": "wechat-bot",
+        "log": "wechat_bot.launchd.log",
+        "run_at_load": True,
+        "schedule_type": "none",
+        "keep_alive": True,
+    },
 }
 
 

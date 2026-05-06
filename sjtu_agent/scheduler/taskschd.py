@@ -37,6 +37,12 @@ _SERVICE_SPECS = {
         "log": "telegram_bot.task.log",
         "schedule": "onlogon",  # 登录时启动
     },
+    "wechat-bot": {
+        "task_name": f"{_TASK_PREFIX}-WeChatBot",
+        "subcommand": "wechat-bot",
+        "log": "wechat_bot.task.log",
+        "schedule": "onlogon",  # 登录时启动
+    },
 }
 
 
@@ -137,8 +143,8 @@ def install(
             "error": result.stderr.strip() if not success else "",
         })
 
-        # 立即触发一次（仅 telegram-bot，类似 run_at_load）
-        if load and success and name == "telegram-bot":
+        # 立即触发一次（telegram-bot / wechat-bot，类似 run_at_load）
+        if load and success and name in ("telegram-bot", "wechat-bot"):
             subprocess.run(["schtasks", "/Run", "/TN", task_name], capture_output=True)
 
     return {

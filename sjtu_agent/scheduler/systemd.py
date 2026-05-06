@@ -43,6 +43,14 @@ _SERVICE_SPECS = {
         "has_timer": False,
         "wants_after": "network-online.target",
     },
+    "wechat-bot": {
+        "unit_name": "sjtu-agent-wechat-bot",
+        "subcommand": "wechat-bot",
+        "log": "wechat_bot.systemd.log",
+        "restart": "always",
+        "has_timer": False,
+        "wants_after": "network-online.target",
+    },
 }
 
 
