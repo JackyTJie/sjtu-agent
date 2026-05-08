@@ -70,6 +70,16 @@ def _get_session(chat_id: int) -> dict:
     return _sessions[chat_id]
 
 
+_TG_CTX = (
+    "\n\n## 当前运行环境：Telegram Bot\n"
+    "你正在通过 Telegram Bot 与用户交互，以下规则适用：\n"
+    "- 当你调用 download_assignments 下载文件后，文件会**自动通过 Telegram 发送给用户**，无需告知用户本地路径或让用户手动打开目录。\n"
+    "- 不要在回复中出现本地文件路径、`open` 命令或任何要求用户在终端操作的指令。\n"
+    "- 下载完成后，直接告知用户「文件已发送」即可，不要描述本地路径。\n"
+    "- 不要说「我无法在对话中传输二进制文件」——在 Telegram 环境下你完全可以发送文件。\n"
+)
+
+
 def _build_date_ctx() -> str:
     """生成包含当前精确时间的日期上下文（每次调用都是最新时间）。"""
     now   = _dt.datetime.now()
@@ -99,7 +109,7 @@ def _init_messages(sess: dict) -> None:
     """首次对话时注入 system prompt；后续每轮由 _capture_turn 刷新时间。"""
     if sess["messages"]:
         return
-    sess["messages"].append({"role": "system", "content": agent.SYSTEM_PROMPT + _build_date_ctx()})
+    sess["messages"].append({"role": "system", "content": agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX})
 
 
 # ── 输出捕获 ──────────────────────────────────────────────────────────────────
@@ -116,7 +126,7 @@ def _capture_turn(sess: dict, user_text: str, on_tool_result=None) -> str:
     _init_messages(sess)
     # 每轮刷新 system prompt 中的时间，避免长会话里时间过期
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX
     sess["messages"].append({"role": "user", "content": user_text})
 
     buf = io.StringIO()
@@ -170,7 +180,7 @@ def _streamed_turn(sess: dict, user_text: str, on_progress, on_tool_result=None)
 
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX
     sess["messages"].append({"role": "user", "content": user_text})
 
     client = sess["client_box"][0]
@@ -787,7 +797,7 @@ def _capture_turn_multimodal(sess: dict, content: list) -> str:
     """
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX
     sess["messages"].append({"role": "user", "content": content})
 
     buf = io.StringIO()
