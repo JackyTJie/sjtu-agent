@@ -28,7 +28,7 @@
   "shuiyuan_user_api_key": "YOUR_USER_API_KEY",
   "shuiyuan_user_api_client_id": "YOUR_CLIENT_ID",
 
-  "_mcp_comment": "External MCP servers loaded by the agent. setup_shuiyuan_mcp can fill the shuiyuan entry automatically.",
+  "_mcp_comment": "External MCP servers loaded by the agent. setup_shuiyuan_mcp and setup_ykst_mcp can fill bundled entries automatically.",
   "mcp_servers": {
     "shuiyuan": {
       "enabled": false,
@@ -36,6 +36,13 @@
       "command": "node",
       "args": ["C:/Users/you/AppData/Roaming/sjtu-agent/mcp/shuiyuan-mcp/dist/shuiyuan-mcp.js"],
       "cwd": "C:/Users/you/AppData/Roaming/sjtu-agent/mcp/shuiyuan-mcp"
+    },
+    "ykst": {
+      "enabled": false,
+      "transport": "stdio",
+      "command": "node",
+      "args": ["C:/Users/you/AppData/Roaming/sjtu-agent/mcp/ykst-treehole-mcp/src/index.js"],
+      "cwd": "C:/Users/you/AppData/Roaming/sjtu-agent/mcp/ykst-treehole-mcp"
     },
     "custom-example": {
       "enabled": false,

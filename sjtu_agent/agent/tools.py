@@ -53,6 +53,14 @@ _SHUIYUAN_MCP_DISCLOSURE = (
     "the author of this setup integration. The default setup pins the checkout "
     f"to commit {_SHUIYUAN_MCP_PINNED_REF} instead of pulling future changes automatically."
 )
+_YKST_MCP_REPO = "https://github.com/dajiaohuang/ykst-treehole-mcp.git"
+_YKST_MCP_PINNED_REF = "44af57e9bad653f2fe929527d7f326995445ecd7"
+_YKST_MCP_DISCLOSURE = (
+    "Disclosure: dajiaohuang/ykst-treehole-mcp is maintained by @dajiaohuang, "
+    "the author of this setup integration. The default setup pins the checkout "
+    f"to commit {_YKST_MCP_PINNED_REF} instead of pulling future changes automatically. "
+    "Treehole write operations in that MCP also require confirm: true."
+)
 
 
 TOOLS = [
@@ -143,6 +151,49 @@ TOOLS = [
                     "run_login": {
                         "type": "boolean",
                         "description": "Whether to run shuiyuan-mcp-login after install. Defaults to false.",
+                    },
+                    "ref": {
+                        "type": "string",
+                        "description": "Optional git commit/tag/branch to checkout. Defaults to a pinned commit.",
+                    },
+                    "acknowledge_external_repo": {
+                        "type": "boolean",
+                        "description": (
+                            "Must be true before installation starts. The first call from chat should leave this "
+                            "false so the user is warned that this installs an external GitHub repository."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_ykst_mcp",
+            "description": (
+                "Install or enable the external YKST/Treehole MCP server from "
+                "https://github.com/dajiaohuang/ykst-treehole-mcp, add it to the "
+                "agent MCP registry, and enable the bundled ykst-mcp skill. "
+                "Disclosure: that MCP repo is maintained by this integration's PR author; "
+                "the default install checks out a pinned commit. "
+                "Use when the user asks to install/enable/load YKST, Treehole, or 树洞 MCP."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "install_dir": {
+                        "type": "string",
+                        "description": "Optional local install directory. Defaults to the sjtu-agent data dir.",
+                    },
+                    "enable": {
+                        "type": "boolean",
+                        "description": "Whether to enable the MCP server after installation. Defaults to true.",
+                    },
+                    "run_login": {
+                        "type": "boolean",
+                        "description": "Whether to run the YKST MCP browser login helper after install. Defaults to false.",
                     },
                     "ref": {
                         "type": "string",
@@ -2387,6 +2438,143 @@ def tool_setup_shuiyuan_mcp(
         "next_action": (
             "If Shuiyuan MCP reports a missing profile, run login_command once, "
             "then restart this agent or continue after tool discovery refreshes."
+        ),
+        "steps": steps,
+    }
+
+
+def tool_setup_ykst_mcp(
+    install_dir: str = "",
+    enable: bool = True,
+    run_login: bool = False,
+    ref: str = "",
+    acknowledge_external_repo: bool = False,
+) -> dict:
+    """Install and register dajiaohuang/ykst-treehole-mcp as an external MCP server."""
+    import shutil
+
+    if not acknowledge_external_repo:
+        return {
+            "requires_confirmation": True,
+            "external_repo": _YKST_MCP_REPO,
+            "pinned_ref": _YKST_MCP_PINNED_REF,
+            "disclosure": _YKST_MCP_DISCLOSURE,
+            "message": (
+                "This setup installs an external GitHub repository and may later run its "
+                "local browser-login helper on this machine. Please confirm before continuing."
+            ),
+            "next_action": (
+                "Tell the user this will install the external GitHub repo "
+                f"{_YKST_MCP_REPO} pinned to {_YKST_MCP_PINNED_REF}. "
+                "Only call setup_ykst_mcp again with acknowledge_external_repo=true "
+                "after the user explicitly confirms."
+            ),
+        }
+
+    git = shutil.which("git")
+    node = shutil.which("node")
+    npm = shutil.which("npm")
+    pnpm = shutil.which("pnpm")
+    missing = [name for name, path in {"git": git, "node": node}.items() if not path]
+    if not (npm or pnpm):
+        missing.append("npm or pnpm")
+    if missing:
+        return {
+            "error": f"Missing required command(s): {', '.join(missing)}",
+            "next_action": "Install Git and Node.js 18+, then run setup_ykst_mcp again.",
+        }
+
+    node_major = _node_major_version(node)
+    node_warning = ""
+    if node_major is not None and node_major < 18:
+        node_warning = f"Detected Node.js {node_major}; ykst-treehole-mcp expects a modern Node.js runtime."
+
+    target = Path(os.path.expandvars(install_dir)).expanduser() if install_dir else CONFIG_PATH.parent / "mcp" / "ykst-treehole-mcp"
+    target = target.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    steps: list[dict] = []
+    repo_url = _YKST_MCP_REPO
+    checkout_ref = (ref or _YKST_MCP_PINNED_REF).strip()
+    if not target.exists():
+        steps.append(_run_setup_command([git, "clone", repo_url, str(target)], target.parent, timeout=600))
+        if not steps[-1].get("ok"):
+            return {"error": "git clone failed", "install_dir": str(target), "steps": steps}
+    elif (target / ".git").exists():
+        steps.append(_run_setup_command([git, "fetch", "--tags", "origin"], target, timeout=300))
+        if not steps[-1].get("ok"):
+            return {"error": "git fetch failed", "install_dir": str(target), "steps": steps}
+    else:
+        return {
+            "error": f"Install directory exists but is not a git checkout: {target}",
+            "next_action": "Choose an empty install_dir or remove the existing directory after backing it up.",
+        }
+
+    steps.append(_run_setup_command([git, "checkout", "--detach", checkout_ref], target, timeout=120))
+    if not steps[-1].get("ok"):
+        return {"error": f"git checkout failed for ref {checkout_ref}", "install_dir": str(target), "steps": steps}
+
+    package_manager = pnpm or npm
+    steps.append(_run_setup_command([package_manager, "install"], target, timeout=900))
+    if not steps[-1].get("ok"):
+        return {"error": "dependency install failed", "install_dir": str(target), "steps": steps}
+
+    mcp_entry = target / "src" / "index.js"
+    if not mcp_entry.exists():
+        return {"error": f"MCP entry not found: {mcp_entry}", "steps": steps}
+
+    cfg = read_json_safe(CONFIG_PATH, {})
+    mcp_servers = cfg.get("mcp_servers", {})
+    if not isinstance(mcp_servers, dict):
+        mcp_servers = {}
+    mcp_servers["ykst"] = {
+        "enabled": bool(enable),
+        "transport": "stdio",
+        "command": node,
+        "args": [str(mcp_entry)],
+        "cwd": str(target),
+        "call_timeout": 180,
+        "description": "YKST Treehole MCP from dajiaohuang/ykst-treehole-mcp",
+    }
+    cfg["mcp_servers"] = mcp_servers
+
+    skills_cfg = cfg.get("skills", {})
+    if not isinstance(skills_cfg, dict):
+        skills_cfg = {}
+    enabled_skills = _normalize_config_list(skills_cfg.get("enabled", []))
+    if "ykst-mcp" not in enabled_skills:
+        enabled_skills.append("ykst-mcp")
+    skills_cfg["enabled"] = enabled_skills
+    cfg["skills"] = skills_cfg
+    atomic_write_json(CONFIG_PATH, cfg)
+
+    login_result = None
+    login_command = f'cd "{target}" && "{package_manager}" run login'
+    if run_login:
+        login_result = _run_setup_command([package_manager, "run", "login"], target, timeout=900)
+
+    try:
+        from sjtu_agent.extensions.mcp_client import list_openai_tools
+        list_openai_tools(force_refresh=True)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "install_dir": str(target),
+        "enabled": bool(enable),
+        "disclosure": _YKST_MCP_DISCLOSURE,
+        "repo": repo_url,
+        "pinned_ref": _YKST_MCP_PINNED_REF,
+        "checkout_ref": checkout_ref,
+        "node_warning": node_warning,
+        "mcp_tool_prefix": "mcp__ykst__",
+        "login_command": login_command,
+        "login_result": login_result,
+        "next_action": (
+            "If YKST MCP reports a missing session, run login_command once. "
+            "Write tools such as reply, rate, favorite, identity switching, and settings updates "
+            "require confirm: true after reviewing the intended action."
         ),
         "steps": steps,
     }
@@ -4832,6 +5020,7 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "get_schedule":          r = tool_get_schedule(**args)
         elif name == "setup_shuiyuan":        r = tool_setup_shuiyuan()
         elif name == "setup_shuiyuan_mcp":    r = tool_setup_shuiyuan_mcp(**args)
+        elif name == "setup_ykst_mcp":        r = tool_setup_ykst_mcp(**args)
         elif name == "add_mcp_server":        r = tool_add_mcp_server(**args)
         elif name == "add_skill":             r = tool_add_skill(**args)
         elif name == "create_skill":          r = tool_create_skill(**args)

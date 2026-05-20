@@ -24,6 +24,8 @@ external MCP servers and prompt-only skills in addition to its built-in tools.
 - Added a bundled `shuiyuan-mcp` skill.
 - Added a setup flow for
   [`dajiaohuang/shuiyuan-mcp`](https://github.com/dajiaohuang/shuiyuan-mcp).
+- Added a bundled `ykst-mcp` skill and setup flow for
+  [`dajiaohuang/ykst-treehole-mcp`](https://github.com/dajiaohuang/ykst-treehole-mcp).
 - Added `add-mcp-server` / `add_mcp_server` for custom MCP server registration.
 - Added `add-skill` / `add_skill` for custom prompt-only skills.
 - Added `create_skill`, `list_skills`, and `manage_skill` so the chat agent can
@@ -34,6 +36,7 @@ external MCP servers and prompt-only skills in addition to its built-in tools.
 
 ```bash
 python -m sjtu_agent.cli setup-shuiyuan-mcp
+python -m sjtu_agent.cli setup-ykst-mcp
 ```
 
 ### Trigger Paths
@@ -47,6 +50,13 @@ There are two supported ways to trigger the setup:
   installs an external GitHub repository and asks for confirmation. The model
   should call the tool again with `acknowledge_external_repo=true` only after the
   user explicitly confirms.
+- CLI: run `python -m sjtu_agent.cli setup-ykst-mcp`.
+- Chat agent: ask the agent to "install YKST MCP", "enable Treehole MCP", or
+  "load dajiaohuang/ykst-treehole-mcp"; the model can then call
+  `setup_ykst_mcp`. The first chat-triggered call only warns that this installs
+  an external GitHub repository and may run a local browser-login helper. The
+  model should call the tool again with `acknowledge_external_repo=true` only
+  after the user explicitly confirms.
 
 Custom MCP servers can also be added in two ways:
 
@@ -70,6 +80,11 @@ Custom prompt-only skills can be added in two ways:
 The command clones or updates `dajiaohuang/shuiyuan-mcp`, installs Node
 dependencies, checks out the pinned commit, builds the MCP server, registers it
 in `config.json`, and enables the bundled `shuiyuan-mcp` skill.
+
+The YKST command clones or updates `dajiaohuang/ykst-treehole-mcp`, installs Node
+dependencies, checks out the pinned commit, registers it in `config.json`, and
+enables the bundled `ykst-mcp` skill. Treehole write operations exposed by that
+MCP require `confirm: true` after the action is reviewed.
 
 Useful options:
 

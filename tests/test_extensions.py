@@ -64,6 +64,15 @@ def test_shuiyuan_mcp_setup_requires_external_repo_confirmation():
     assert "acknowledge_external_repo=true" in result["next_action"]
 
 
+def test_ykst_mcp_setup_requires_external_repo_confirmation():
+    from sjtu_agent.agent.tools import tool_setup_ykst_mcp
+
+    result = tool_setup_ykst_mcp()
+    assert result["requires_confirmation"] is True
+    assert result["external_repo"] == "https://github.com/dajiaohuang/ykst-treehole-mcp.git"
+    assert "acknowledge_external_repo=true" in result["next_action"]
+
+
 def test_add_mcp_server_requires_confirmation():
     from sjtu_agent.agent.tools import tool_add_mcp_server
 
@@ -99,6 +108,52 @@ def test_add_mcp_server_writes_config(tmp_path, monkeypatch):
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     assert cfg["mcp_servers"]["demo"]["url"] == "http://127.0.0.1:8765/sse"
     assert cfg["mcp_servers"]["demo"]["enabled"] is True
+
+
+def test_ykst_mcp_setup_writes_config_and_skill(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    install_dir = tmp_path / "ykst"
+    calls = []
+
+    from sjtu_agent.agent import tools
+    from sjtu_agent.extensions import mcp_client
+
+    def fake_which(name):
+        return {"git": "git", "node": "node", "npm": "npm"}.get(name)
+
+    def fake_run(command, cwd, timeout=120):
+        calls.append(command)
+        if command[:2] == ["git", "clone"]:
+            target = Path(command[-1])
+            (target / ".git").mkdir(parents=True)
+            (target / "src").mkdir()
+            (target / "src" / "index.js").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+            (target / "package.json").write_text("{}", encoding="utf-8")
+        return {"ok": True, "command": command, "cwd": str(cwd)}
+
+    monkeypatch.setattr(tools, "CONFIG_PATH", config_path)
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr(tools, "_node_major_version", lambda node: 20)
+    monkeypatch.setattr(tools, "_run_setup_command", fake_run)
+    monkeypatch.setattr(mcp_client, "list_openai_tools", lambda force_refresh=False: [])
+
+    result = tools.tool_setup_ykst_mcp(
+        install_dir=str(install_dir),
+        acknowledge_external_repo=True,
+    )
+    assert result["ok"] is True
+    assert result["mcp_tool_prefix"] == "mcp__ykst__"
+    assert any(cmd[:2] == ["git", "checkout"] for cmd in calls)
+    assert any(cmd == ["npm", "install"] for cmd in calls)
+
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    server = cfg["mcp_servers"]["ykst"]
+    assert server["enabled"] is True
+    assert server["args"] == [str(install_dir.resolve() / "src" / "index.js")]
+    assert cfg["skills"]["enabled"] == ["ykst-mcp"]
 
 
 def test_add_skill_writes_and_enables(tmp_path, monkeypatch):

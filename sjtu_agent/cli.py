@@ -275,6 +275,20 @@ def _cmd_setup_shuiyuan_mcp(args: argparse.Namespace) -> int:
     return 0 if payload.get("ok") else 1
 
 
+def _cmd_setup_ykst_mcp(args: argparse.Namespace) -> int:
+    from sjtu_agent.agent.tools import tool_setup_ykst_mcp
+
+    payload = tool_setup_ykst_mcp(
+        install_dir=args.install_dir or "",
+        enable=not args.disabled,
+        run_login=args.login,
+        ref=args.ref or "",
+        acknowledge_external_repo=True,
+    )
+    print_json(payload)
+    return 0 if payload.get("ok") else 1
+
+
 def _parse_kv_items(items: list[str] | None) -> dict[str, str]:
     result: dict[str, str] = {}
     for item in items or []:
@@ -463,6 +477,16 @@ def build_parser() -> argparse.ArgumentParser:
     shuiyuan_mcp_parser.add_argument("--login", action="store_true", help="run shuiyuan-mcp-login after installation")
     shuiyuan_mcp_parser.add_argument("--ref", default="", help="git commit/tag/branch to checkout (default: pinned commit)")
     shuiyuan_mcp_parser.set_defaults(func=_cmd_setup_shuiyuan_mcp)
+
+    ykst_mcp_parser = subparsers.add_parser(
+        "setup-ykst-mcp",
+        help="install and enable dajiaohuang/ykst-treehole-mcp as an external MCP server",
+    )
+    ykst_mcp_parser.add_argument("--install-dir", default="", help="custom install directory")
+    ykst_mcp_parser.add_argument("--disabled", action="store_true", help="install but do not enable")
+    ykst_mcp_parser.add_argument("--login", action="store_true", help="run YKST browser login helper after installation")
+    ykst_mcp_parser.add_argument("--ref", default="", help="git commit/tag/branch to checkout (default: pinned commit)")
+    ykst_mcp_parser.set_defaults(func=_cmd_setup_ykst_mcp)
 
     add_mcp_parser = subparsers.add_parser(
         "add-mcp-server",

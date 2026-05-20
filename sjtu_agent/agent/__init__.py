@@ -9,7 +9,7 @@ from sjtu_agent.agent.tools import (
     tool_download_assignments, tool_list_assignment_files, tool_read_assignment_file,
     tool_search_campus, tool_browse_mysjtu,
     tool_save_credentials, tool_login_platform,
-    tool_setup_canvas, tool_setup_shuiyuan, tool_setup_shuiyuan_mcp,
+    tool_setup_canvas, tool_setup_shuiyuan, tool_setup_shuiyuan_mcp, tool_setup_ykst_mcp,
     tool_add_mcp_server, tool_add_skill, tool_create_skill, tool_list_skills, tool_manage_skill,
     tool_setup_telegram, tool_setup_wechat, tool_setup_feishu,
     tool_execute_python, tool_get_user_profile, tool_update_user_profile,

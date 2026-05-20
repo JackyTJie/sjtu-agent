@@ -197,6 +197,52 @@ Default pinned ref:
 5c79b6e767f5aa55a3f342f5550ec74520fd52e5
 ```
 
+## YKST MCP Flow
+
+The built-in setup tool `setup_ykst_mcp` installs and enables:
+
+<https://github.com/dajiaohuang/ykst-treehole-mcp>
+
+Disclosure: `dajiaohuang/ykst-treehole-mcp` is maintained by @dajiaohuang, the
+author of this setup integration. Keep that relationship visible in user-facing
+docs and avoid silently expanding the trust boundary.
+
+CLI entrypoint:
+
+```bash
+python -m sjtu_agent.cli setup-ykst-mcp
+```
+
+Chat trigger:
+
+- "install YKST MCP"
+- "enable Treehole MCP"
+- "load dajiaohuang/ykst-treehole-mcp"
+- Chinese equivalents such as "安装树洞 MCP" or "启用 YKST MCP"
+
+These requests should route to the built-in `setup_ykst_mcp` tool. The first
+chat-triggered call must leave `acknowledge_external_repo` false so the tool
+returns an explicit external-GitHub-repository warning. Only call it again with
+`acknowledge_external_repo=true` after the user confirms.
+
+Behavior:
+
+- clones or updates `dajiaohuang/ykst-treehole-mcp`
+- checks out the default pinned commit unless the caller explicitly passes a ref
+- installs Node dependencies with `pnpm` if available, otherwise `npm`
+- writes `mcp_servers.ykst` to `config.json`
+- enables the bundled `ykst-mcp` skill
+- prints a `login_command` for the local browser-login flow
+
+Treehole write tools exposed by the MCP require `confirm: true` after the target
+and arguments are reviewed.
+
+Default pinned ref:
+
+```text
+44af57e9bad653f2fe929527d7f326995445ecd7
+```
+
 ## Prompt and Entry Points
 
 Multiple entrypoints run their own tool loops. When changing tool plumbing,

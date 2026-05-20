@@ -128,6 +128,12 @@ maintained by the PR author of this integration. The setup command pins the
 checkout to a known commit by default instead of silently pulling future changes
 into the agent trust domain.
 
+Disclosure: the optional YKST/Treehole MCP integration installs
+[dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp),
+which is also maintained by the PR author of this integration. The setup command
+pins the checkout to a known commit by default. Treehole write operations exposed
+by that MCP require `confirm: true` after the intended action is reviewed.
+
 Install and enable Shuiyuan MCP:
 
 ```bash
@@ -141,6 +147,23 @@ GitHub repository and ask for confirmation; installation starts only after the
 user explicitly confirms.
 
 This pulls and builds [dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp), registers it as the `shuiyuan` MCP server, and enables the bundled `shuiyuan-mcp` skill. If the MCP server later reports a missing profile/cookie, run the `login_command` printed by the setup command once.
+
+Install and enable YKST/Treehole MCP:
+
+```bash
+sjtu-agent setup-ykst-mcp
+```
+
+You can also trigger it from chat by asking to "install YKST MCP", "enable
+Treehole MCP", or "load dajiaohuang/ykst-treehole-mcp". The first chat-triggered
+call only warns that this installs an external GitHub repository and may run a
+local browser-login helper; installation starts only after explicit
+confirmation.
+
+This pulls [dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp),
+installs dependencies, registers it as the `ykst` MCP server, and enables the
+bundled `ykst-mcp` skill. If the MCP server later reports a missing session, run
+the `login_command` printed by the setup command once.
 
 Add any custom MCP server:
 
