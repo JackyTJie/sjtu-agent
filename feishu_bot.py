@@ -225,6 +225,9 @@ def _extract_text(content_json: str) -> str:
 
 
 def _handle_message(data: P2ImMessageReceiveV1) -> None:
+    cfg = _load_cfg()
+    if not cfg.get("feishu_enabled", True):
+        return
     try:
         ev = data.event
         msg = ev.message
