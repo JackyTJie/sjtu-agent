@@ -18,11 +18,13 @@ feishu_bot.py — 将 agent.py 接入飞书（Lark）自建应用，长连接接
 """
 
 import argparse
+import concurrent.futures
 import io
 import json
 import re
 import sys
 import threading
+import time
 import datetime as _dt
 from pathlib import Path
 
@@ -50,15 +52,24 @@ def _load_cfg() -> dict:
 cfg = _load_cfg()
 APP_ID = cfg.get("feishu_app_id", "").strip()
 APP_SECRET = cfg.get("feishu_app_secret", "").strip()
-ALLOWED_OPEN_IDS: set[str] = set(cfg.get("feishu_allowed_open_ids", []) or [])
+_raw_allowed = cfg.get("feishu_allowed_open_ids", []) or []
+if isinstance(_raw_allowed, str):
+    try:
+        _raw_allowed = json.loads(_raw_allowed)
+    except Exception:
+        _raw_allowed = []
+ALLOWED_OPEN_IDS: set[str] = set(_raw_allowed)
 
 if not APP_ID or not APP_SECRET:
-    print("❌ config.json 中未设置 feishu_app_id / feishu_app_secret，请先在 WebUI 或 setup 中配置")
+    print("[X] config.json 中未设置 feishu_app_id / feishu_app_secret，请先在 WebUI 或 setup 中配置")
     sys.exit(1)
 
 
 # ── 全局 API client（用来回复消息） ────────────────────────────────────────────
 _api_client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
+
+# ── 后台线程池（LLM 推理在后台线程执行，避免阻塞 WS event loop） ─────────
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="feishu")
 
 # ── 会话状态（每个 open_id 独立） ─────────────────────────────────────────────
 _sessions: dict[str, dict] = {}
@@ -82,8 +93,11 @@ def _get_session(open_id: str) -> tuple[dict, threading.Lock]:
 _FS_CTX = (
     "\n\n## 当前运行环境：飞书 Bot\n"
     "你正在通过飞书（Lark）与用户交互：\n"
-    "- 回复以纯文本形式发出，飞书会自动渲染基本 markdown。\n"
+    "- 支持 Markdown 格式：**加粗**、*斜体*、`代码`、链接、列表、表格均可正常使用。\n"
+    "- 代码块用三个反引号包裹并标注语言。\n"
+    "- 表格请使用标准 Markdown 表格格式。\n"
     "- 不要在回复中给出本地文件路径或让用户在终端操作的指令。\n"
+    "- 回复以中文为主，适当使用格式提升可读性。\n"
 )
 
 
@@ -158,15 +172,264 @@ def _capture_turn(sess: dict, user_text: str) -> str:
     return clean[idx + len(marker):].strip()
 
 
-# ── 回复与拆包 ───────────────────────────────────────────────────────────────
+# ── 消息去重 ──────────────────────────────────────────────────────────────────
 
-_FS_MSG_MAX = 4000  # 飞书单条文本消息长度上限约 5000，留点余量
+_SEEN_IDS: dict[str, float] = {}
+_SEEN_IDS_LOCK = threading.Lock()
+_SEEN_TTL = 300  # 5 分钟
+
+
+def _is_duplicate(message_id: str) -> bool:
+    """检查 message_id 是否已处理过，防止飞书重发导致重复回复。"""
+    now = time.time()
+    with _SEEN_IDS_LOCK:
+        expired = [mid for mid, ts in _SEEN_IDS.items() if now - ts > _SEEN_TTL]
+        for mid in expired:
+            del _SEEN_IDS[mid]
+        if message_id in _SEEN_IDS:
+            return True
+        _SEEN_IDS[message_id] = now
+        return False
+
+
+# ── Markdown → 飞书 post / interactive 转换 ───────────────────────────────────
+
+_FS_MSG_MAX = 4000  # 飞书单条消息长度上限约 5000，留点余量
+
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_MD_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+_MD_CODE_RE = re.compile(r"`([^`\n]+?)`")
+_MD_TABLE_SEP_RE = re.compile(r"^\|?\s*[-:]{3,}\s*\|\s*[-:]{3,}\s*(\|\s*[-:]{3,}\s*)*\|?\s*$")
+
+# 飞书 post 格式中的元素类型
+_PostElement = dict  # {"tag": "text"|"a", "text": str, ...}
+_PostParagraph = list  # list[_PostElement]
+_PostContent = list  # list[_PostParagraph]
+
+
+def _has_table(md_text: str) -> bool:
+    """检测 Markdown 文本是否包含表格。"""
+    lines = md_text.strip().split("\n")
+    for i, line in enumerate(lines):
+        if i > 0 and _MD_TABLE_SEP_RE.match(line.strip()):
+            return True
+    return False
+
+
+def _build_post_content(md_text: str) -> _PostContent:
+    """将 Markdown 文本转换为飞书 post 格式的 content 二维数组。"""
+    paragraphs: _PostContent = []
+    lines = md_text.strip().split("\n")
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            paragraphs.append([])  # 空行
+            continue
+
+        # 标题 → 去掉 # 前缀，内联解析后整体加粗
+        header_match = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if header_match:
+            text = header_match.group(2)
+            h_elements = _parse_inline(text)
+            for el in h_elements:
+                if el.get("tag") == "text":
+                    el["style"] = (el.get("style") or []) + ["bold"]
+            paragraphs.append(h_elements)
+            continue
+
+        # 无序列表 → 去掉前缀，内联解析
+        list_match = re.match(r"^[-*]\s+(.+)$", stripped)
+        if list_match:
+            li_elements = _parse_inline(list_match.group(1))
+            paragraphs.append([_el_text("• ")] + li_elements)
+            continue
+
+        # 有序列表 → 提取序号和内容，内联解析
+        ol_match = re.match(r"^(\d+\.)\s+(.+)$", stripped)
+        if ol_match:
+            prefix = ol_match.group(1) + " "
+            ol_elements = _parse_inline(ol_match.group(2))
+            paragraphs.append([_el_text(prefix)] + ol_elements)
+            continue
+
+        # 引用块
+        if stripped.startswith(">"):
+            text = stripped.lstrip("> ").lstrip(">")
+            paragraphs.append([_el_text(text)])
+            continue
+
+        # 分隔线
+        if stripped in ("---", "***", "___"):
+            paragraphs.append([_el_text("—" * 20)])
+            continue
+
+        # 普通段落 → 解析内联样式
+        elements = _parse_inline(stripped)
+        paragraphs.append(elements)
+
+    return paragraphs
+
+
+def _parse_inline(text: str) -> _PostParagraph:
+    """解析一行中的内联 Markdown 为 post 元素列表。"""
+    elements: _PostParagraph = []
+    pos = 0
+    remaining = text
+
+    while remaining:
+        # 找最早的标记（bold+italic 优先于 bold 和 italic）
+        bold_italic_m = _MD_BOLD_ITALIC_RE.search(remaining)
+        bold_m = _MD_BOLD_RE.search(remaining)
+        italic_m = _MD_ITALIC_RE.search(remaining)
+        code_m = _MD_CODE_RE.search(remaining)
+        link_m = _MD_LINK_RE.search(remaining)
+
+        candidates = []
+        if bold_italic_m: candidates.append((bold_italic_m.start(), bold_italic_m, "bold_italic"))
+        if bold_m: candidates.append((bold_m.start(), bold_m, "bold"))
+        if italic_m: candidates.append((italic_m.start(), italic_m, "italic"))
+        if code_m: candidates.append((code_m.start(), code_m, "code"))
+        if link_m: candidates.append((link_m.start(), link_m, "link"))
+
+        if not candidates:
+            txt = _unescape_md(remaining)
+            if txt:
+                elements.append(_el_text(txt))
+            break
+
+        candidates.sort(key=lambda x: x[0])
+        first_start, first_match, first_type = candidates[0]
+
+        # 标记前的纯文本
+        if first_start > 0:
+            prefix = _unescape_md(remaining[:first_start])
+            if prefix:
+                elements.append(_el_text(prefix))
+
+        if first_type == "bold_italic":
+            elements.append(_el_text(first_match.group(1), ["bold", "italic"]))
+            remaining = remaining[first_match.end():]
+        elif first_type == "bold":
+            elements.append(_el_text(first_match.group(1), ["bold"]))
+            remaining = remaining[first_match.end():]
+        elif first_type == "italic":
+            elements.append(_el_text(first_match.group(1), ["italic"]))
+            remaining = remaining[first_match.end():]
+        elif first_type == "code":
+            elements.append(_el_text(first_match.group(1)))
+            remaining = remaining[first_match.end():]
+        elif first_type == "link":
+            elements.append(_el_link(first_match.group(1), first_match.group(2)))
+            remaining = remaining[first_match.end():]
+
+    # 合并相邻同风格 text 元素
+    merged: _PostParagraph = []
+    for el in elements:
+        if (merged and el.get("tag") == "text" and merged[-1].get("tag") == "text"
+                and el.get("style") == merged[-1].get("style")
+                and "href" not in el):
+            merged[-1]["text"] += el["text"]
+        else:
+            merged.append(el)
+    return merged
+
+
+def _el_text(text: str, style: list | None = None) -> _PostElement:
+    el: _PostElement = {"tag": "text", "text": text}
+    if style:
+        el["style"] = style
+    return el
+
+
+def _el_link(text: str, href: str) -> _PostElement:
+    return {"tag": "a", "text": text, "href": href}
+
+
+def _unescape_md(text: str) -> str:
+    """去掉反斜杠转义。"""
+    return text.replace("\\*", "*").replace("\\`", "`").replace("\\[", "[")
+
+
+def _build_card_content(md_text: str) -> str:
+    """构建交互式卡片的 markdown 内容（用于含表格的消息）。"""
+    # 卡片 markdown 元素原生支持 Markdown 语法
+    return md_text[:30000]  # 飞书卡片 markdown 有长度限制
+
+
+# ── 回复消息 ──────────────────────────────────────────────────────────────────
 
 
 def _reply_text(message_id: str, text: str) -> None:
-    """回复一条文本消息（线程内回复，飞书 UI 显示成 reply）。"""
+    """回复消息，自动检测表格并选择合适的格式（post 或 interactive）。"""
     if not text:
         text = "(已完成)"
+
+    # 空回复不处理
+    if not text.strip():
+        return
+
+    # 含表格 → 用 interactive 卡片（markdown 元素原生支持表格）
+    if _has_table(text):
+        _reply_card(message_id, text)
+        return
+
+    # 普通内容 → post 格式
+    post_content = _build_post_content(text)
+    if not post_content:
+        _reply_raw_text(message_id, text)
+        return
+
+    # 分块发送（post 有大段限制）
+    # 按段落数分块，每块最多 30 个段落
+    para_chunks = [post_content[i:i + 30] for i in range(0, len(post_content), 30)]
+    for para_chunk in para_chunks:
+        content = {"zh_cn": {"title": "", "content": para_chunk}}
+        req = (
+            ReplyMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder()
+                .content(json.dumps(content, ensure_ascii=False))
+                .msg_type("post")
+                .build()
+            )
+            .build()
+        )
+        resp = _api_client.im.v1.message.reply(req)
+        if not resp.success():
+            print(f"[feishu] post 回复失败 code={resp.code} msg={resp.msg}，降级为 text")
+            _reply_raw_text(message_id, text)
+            break
+
+
+def _reply_card(message_id: str, text: str) -> None:
+    """用 interactive 卡片回复（含 markdown 元素，支持表格）。"""
+    card = {
+        "config": {"wide_screen_mode": True},
+        "elements": [{"tag": "markdown", "content": _build_card_content(text)}],
+    }
+    req = (
+        ReplyMessageRequest.builder()
+        .message_id(message_id)
+        .request_body(
+            ReplyMessageRequestBody.builder()
+            .content(json.dumps(card, ensure_ascii=False))
+            .msg_type("interactive")
+            .build()
+        )
+        .build()
+    )
+    resp = _api_client.im.v1.message.reply(req)
+    if not resp.success():
+        print(f"[feishu] card 回复失败 code={resp.code} msg={resp.msg}，降级为 text")
+        _reply_raw_text(message_id, text)
+
+
+def _reply_raw_text(message_id: str, text: str) -> None:
+    """纯文本降级回复。"""
     chunks = [text[i:i + _FS_MSG_MAX] for i in range(0, len(text), _FS_MSG_MAX)] or [text]
     for chunk in chunks:
         req = (
@@ -190,21 +453,66 @@ def _send_to_chat(chat_id: str, text: str) -> None:
     """主动发消息到会话（供 reminder 推送等场景使用）。"""
     if not text:
         return
-    req = (
-        CreateMessageRequest.builder()
-        .receive_id_type("chat_id")
-        .request_body(
-            CreateMessageRequestBody.builder()
-            .receive_id(chat_id)
-            .msg_type("text")
-            .content(json.dumps({"text": text}, ensure_ascii=False))
+
+    # 含表格 → interactive 卡片
+    if _has_table(text):
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "markdown", "content": _build_card_content(text)}],
+        }
+        req = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("interactive")
+                .content(json.dumps(card, ensure_ascii=False))
+                .build()
+            )
             .build()
         )
-        .build()
-    )
-    resp = _api_client.im.v1.message.create(req)
-    if not resp.success():
-        print(f"[feishu] 主动发送失败 code={resp.code} msg={resp.msg}")
+        resp = _api_client.im.v1.message.create(req)
+        if not resp.success():
+            print(f"[feishu] 主动发送 card 失败 code={resp.code} msg={resp.msg}")
+        return
+
+    # 普通内容 → post
+    post_content = _build_post_content(text)
+    if post_content:
+        content = {"zh_cn": {"title": "", "content": post_content}}
+        req = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("post")
+                .content(json.dumps(content, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        resp = _api_client.im.v1.message.create(req)
+        if not resp.success():
+            print(f"[feishu] 主动发送失败 code={resp.code} msg={resp.msg}")
+    else:
+        # fallback text
+        req = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("text")
+                .content(json.dumps({"text": text}, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        resp = _api_client.im.v1.message.create(req)
+        if not resp.success():
+            print(f"[feishu] 主动发送失败 code={resp.code} msg={resp.msg}")
 
 
 # ── 事件处理 ──────────────────────────────────────────────────────────────────
@@ -224,7 +532,29 @@ def _extract_text(content_json: str) -> str:
     return text.strip()
 
 
+def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
+    """Phase 2: 在后台线程中执行 LLM 推理 + 回复。"""
+    sess, lock = _get_session(sender_open_id)
+    if not lock.acquire(blocking=False):
+        _reply_text(message_id, "⏳ 上一条消息还在处理中，请稍候…")
+        return
+    try:
+        reply = _capture_turn(sess, text)
+    except Exception as e:
+        print(f"[feishu] 处理出错：{e}")
+        _reply_text(message_id, f"❌ 出错了：{e}")
+        return
+    finally:
+        lock.release()
+
+    _reply_text(message_id, reply)
+
+
 def _handle_message(data: P2ImMessageReceiveV1) -> None:
+    """Phase 1: 轻量同步工作（event loop 线程），立即返回让 ack 快速发出。"""
+    cfg = _load_cfg()
+    if not cfg.get("feishu_enabled", True):
+        return
     try:
         ev = data.event
         msg = ev.message
@@ -234,9 +564,13 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         message_id = msg.message_id
         msg_type = msg.message_type
         chat_id = msg.chat_id
-        chat_type = msg.chat_type  # "p2p" 或 "group"
+        chat_type = msg.chat_type
 
-        # 只处理文本（其他类型先忽略）
+        # ── 去重：飞书可能因 ack 超时重发同一事件 ──────────────────────
+        if _is_duplicate(message_id):
+            print(f"[feishu] 跳过重复消息 message_id={message_id}")
+            return
+
         if msg_type != "text":
             _reply_text(message_id, f"(暂不支持的消息类型: {msg_type}，目前只接收文本)")
             return
@@ -245,46 +579,36 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         if not text:
             return
 
-        print(f"[feishu] 收到消息 from open_id={sender_open_id[:12]}… chat_type={chat_type} text={text[:60]!r}")
+        # 过滤"清空聊天记录"/撤回消息产生的系统通知
+        if text in {"此消息已删除", "该消息已被撤回"}:
+            print(f"[feishu] 跳过已删除/撤回的系统消息 message_id={message_id}")
+            return
 
-        # whoami 调试模式：直接回 open_id
+        print(f"[feishu] 收到消息 from open_id={sender_open_id[:12]}… "
+              f"chat_type={chat_type} text={text[:60]!r}")
+
         if WHOAMI_MODE:
             _reply_text(
                 message_id,
-                f"你的 open_id 是:\n{sender_open_id}\n\n请把它加入 config.json 的 feishu_allowed_open_ids 后重启 bot。",
+                f"你的 open_id 是:\n{sender_open_id}\n\n"
+                f"请把它加入 config.json 的 feishu_allowed_open_ids 后重启 bot。",
             )
             return
 
-        # 白名单
         if ALLOWED_OPEN_IDS and sender_open_id not in ALLOWED_OPEN_IDS:
-            print(f"[feishu] ⚠ 未授权 open_id：{sender_open_id}（请加入 feishu_allowed_open_ids）")
-            _reply_text(
-                message_id,
-                "⚠️ 你不在该机器人的允许列表中。\n"
-                f"如果是你本人请把这个 open_id 加入 config.json 的 feishu_allowed_open_ids:\n{sender_open_id}",
-            )
+            print(f"[feishu] [!] 未授权 open_id：{sender_open_id}")
+            _reply_text(message_id, "你不在该机器人的允许列表中。\n"
+                        f"请把这个 open_id 加入 config.json 的 feishu_allowed_open_ids:\n"
+                        f"{sender_open_id}")
             return
 
         if not ALLOWED_OPEN_IDS:
-            # 白名单为空时也提示（一次性引导）
-            print(
-                f"[feishu] ℹ 白名单为空，已允许所有人；建议把此 open_id 加入白名单：{sender_open_id}"
-            )
+            print(f"[feishu] [i] 白名单为空，已允许所有人；建议把此 open_id 加入白名单："
+                  f"{sender_open_id}")
 
-        sess, lock = _get_session(sender_open_id)
-        if not lock.acquire(blocking=False):
-            _reply_text(message_id, "⏳ 上一条消息还在处理中，请稍候…")
-            return
-        try:
-            reply = _capture_turn(sess, text)
-        except Exception as e:
-            print(f"[feishu] 处理出错：{e}")
-            _reply_text(message_id, f"❌ 出错了：{e}")
-            return
-        finally:
-            lock.release()
+        # ── 提交到后台线程，立即返回 ──
+        _EXECUTOR.submit(_process_in_thread, sender_open_id, message_id, text)
 
-        _reply_text(message_id, reply)
     except Exception as e:
         print(f"[feishu] handler 异常：{e}")
 
@@ -319,22 +643,22 @@ def main() -> None:
         try:
             tenant_token = _api_client._config.token_manager.get_tenant_access_token()  # type: ignore
             if tenant_token:
-                print(f"✅ 凭据 OK，tenant_access_token 已获取（前 8 位）：{tenant_token[:8]}…")
+                print(f"[OK] 凭据 OK，tenant_access_token 已获取（前 8 位）：{tenant_token[:8]}…")
                 sys.exit(0)
-            print("❌ 未能获取 tenant_access_token，请检查 App ID / App Secret")
+            print("[X] 未能获取 tenant_access_token，请检查 App ID / App Secret")
             sys.exit(1)
         except Exception as e:
-            print(f"❌ 凭据校验失败：{e}")
+            print(f"[X] 凭据校验失败：{e}")
             sys.exit(1)
 
     WHOAMI_MODE = args.whoami
     if WHOAMI_MODE:
-        print("⚙️  WHOAMI 模式：bot 会把每个发送者的 open_id 原样回显，不调 agent")
+        print("[whoami] WHOAMI 模式：bot 会把每个发送者的 open_id 原样回显，不调 agent")
 
     client = _build_ws_client()
-    print(f"✅ 飞书 bot 已启动（App ID: {APP_ID[:10]}…），等待消息…")
+    print(f"[OK] 飞书 bot 已启动（App ID: {APP_ID[:10]}…），等待消息…")
     if not ALLOWED_OPEN_IDS:
-        print("ℹ️  feishu_allowed_open_ids 为空，所有人均可对话。建议加白名单后重启。")
+        print("[i] feishu_allowed_open_ids 为空，所有人均可对话。建议加白名单后重启。")
     client.start()  # 阻塞，内部 WS 自动重连
 
 
