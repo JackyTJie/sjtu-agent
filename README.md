@@ -92,6 +92,7 @@ sjtu-agent                # 启动主对话
 sjtu-agent setup          # 运行首次配置向导
 sjtu-agent doctor         # 查看当前配置状态和运行时路径
 sjtu-agent setup-config   # 从浏览器读取 Cookie 并生成 config.json
+sjtu-agent ykst-login     # 配置原生 YKST/树洞登录
 sjtu-agent login --aihaoke
 sjtu-agent ddl --canvas-only
 sjtu-agent daily-report --test
@@ -222,6 +223,24 @@ sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 - `agent_config.json`：大模型提供方、Base URL 和模型名（若已在 `.env` 填写 `ZHIYUAN_API_KEY` 则无需此文件）
 
 对于 Canvas，如果 Playwright 和 jAccount 凭据已经就绪，`sjtu-agent setup` 会优先尝试自动创建并保存 Token；如果自动流程失败，再回退到打开 `https://oc.sjtu.edu.cn/profile/settings` 并让你手动确认一次。
+
+## YKST / 树洞原生支持
+
+SJTU Agent 内置 YKST/TreeHole gRPC-Web 客户端，不需要安装额外 MCP 服务即可读取树洞主题、回帖、身份列表，并在二次确认后执行回帖、切换身份、点赞/点踩和收藏等操作。
+
+登录方式：
+
+```bash
+sjtu-agent ykst-login
+```
+
+命令会打开 jAccount OAuth 登录页。登录后，把浏览器地址栏中的完整回调 URL 贴回：
+
+```bash
+sjtu-agent ykst-login --callback-url "https://web.treehole.space/auth/jaccount?code=..."
+```
+
+也可以在对话里说「配置树洞」触发同样流程。登录态只会保存到本机 `config.json` 的 `ykst_treehole_token` 字段；也支持用环境变量 `TREEHOLE_SESSION` / `TREEHOLE_TOKEN` 和 `TREEHOLE_RPC_HOST` 覆盖。
 
 ## 运行时数据
 
