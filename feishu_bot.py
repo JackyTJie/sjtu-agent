@@ -46,7 +46,10 @@ import agent
 
 
 def _load_cfg() -> dict:
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
 
 cfg = _load_cfg()
@@ -98,8 +101,8 @@ def _load_sessions() -> None:
                     if c.get("saved_at", 0) < cutoff:
                         continue
                     agent_cfg = agent.load_agent_config()
-                    c["model_box"] = [agent_cfg["model"]]
-                    c["client_box"] = [agent._make_client(agent_cfg)]
+                    c["model_box"] = [agent_cfg.get("model", "deepseek-chat")]
+                    c["client_box"] = [agent._make_client(agent_cfg) if agent_cfg else None]
                     convs.append(c)
                 if convs:
                     _sessions[open_id] = {
@@ -149,8 +152,8 @@ def _new_conv_dict(name: str) -> dict:
     return {
         "name": name,
         "messages": [],
-        "model_box": [agent_cfg["model"]],
-        "client_box": [agent._make_client(agent_cfg)],
+        "model_box": [agent_cfg.get("model", "deepseek-chat")],
+        "client_box": [agent._make_client(agent_cfg) if agent_cfg.get("api_key") else None],
         "created_at": _dt.datetime.now().strftime("%m-%d %H:%M"),
     }
 
@@ -514,7 +517,7 @@ def _reply_text(message_id: str, text: str) -> None:
     # 分块发送（post 有大段限制）
     # 按段落数分块，每块最多 30 个段落
     para_chunks = [post_content[i:i + 30] for i in range(0, len(post_content), 30)]
-    for para_chunk in para_chunks:
+    for idx, para_chunk in enumerate(para_chunks):
         content = {"zh_cn": {"title": "", "content": para_chunk}}
         req = (
             ReplyMessageRequest.builder()
@@ -530,7 +533,10 @@ def _reply_text(message_id: str, text: str) -> None:
         resp = _api_client.im.v1.message.reply(req)
         if not resp.success():
             print(f"[feishu] post 回复失败 code={resp.code} msg={resp.msg}，降级为 text")
-            _reply_raw_text(message_id, text)
+            # 只发送剩余未成功段落为纯文本
+            remaining = [c for chunk in para_chunks[idx:] for p in chunk for el in p
+                         for c in (el.get("text", "") + chr(10))]
+            _reply_raw_text(message_id, "".join(remaining).strip() or text)
             break
 
 
