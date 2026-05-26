@@ -209,17 +209,27 @@ def _download_and_analyze_one(d: dict, idx: int) -> str:
     content = read_assignment_content(hw_dir)
     if "[无可读文件]" in content:
         return (
-            f"**[{idx}] {course} — {aname}**\n"
-            f"  截止：{due_str}（{remaining} 天）\n"
-            f"  {content}"
+            f"[{idx}] {course} — {aname}\n"
+            f"截止：{due_str}（{remaining}）\n"
+            f"{content}"
         )
 
     print(f"[homework] 分析: {course} - {aname}")
     analysis = analyze_homework(course, aname, content)
+
+    # 保存分析结果到本地 Markdown 文件
+    try:
+        hw_dir.mkdir(parents=True, exist_ok=True)
+        (hw_dir / "_分析结果.md").write_text(analysis, encoding="utf-8")
+        print(f"[homework] 已保存分析到 {hw_dir / '_分析结果.md'}")
+    except Exception as e:
+        print(f"[homework] 保存分析失败: {e}")
+
     return (
-        f"**[{idx}] {course} — {aname}**\n"
-        f"  截止：{due_str}（{remaining} 天）\n\n"
+        f"[{idx}] {course} — {aname}\n"
+        f"截止：{due_str}（{remaining}）\n\n"
         f"{analysis}"
+    )
     )
 
 
