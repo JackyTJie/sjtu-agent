@@ -92,6 +92,69 @@ def _latex_to_unicode(text: str) -> str:
     return text
 
 
+def _extract_code_blocks(md_text: str) -> list[tuple[str, str]]:
+    """从 Markdown 提取代码块，返回 [(language, code), ...]."""
+    blocks = []
+    pattern = re.compile(r"```(\w+)?\n(.*?)```", re.DOTALL)
+    for m in pattern.finditer(md_text):
+        lang = m.group(1) or ""
+        code = m.group(2).strip()
+        blocks.append((lang, code))
+    return blocks
+
+
+def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
+    """从 Markdown 文本生成 PDF（中文支持）。"""
+    try:
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        font_path = "C:/Windows/Fonts/msyh.ttc"
+        try:
+            pdf.add_font("CJK", "", font_path, uni=True)
+            pdf.add_font("CJK", "B", font_path, uni=True)
+        except Exception:
+            pass
+        pdf.set_font("CJK", "", 11)
+        pdf.set_font_size(14)
+        pdf.multi_cell(0, 10, title)
+        pdf.ln(5)
+        pdf.set_font_size(10)
+        clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", md_text)
+        clean = re.sub(r"\*([^*]+)\*", r"\1", clean)
+        clean = re.sub(r"`([^`]+)`", r"\1", clean)
+        clean = re.sub(r"```.*?```", "[代码块]", clean, flags=re.DOTALL)
+        for line in clean.split("\n"):
+            if pdf.get_y() > 270:
+                pdf.add_page()
+            pdf.multi_cell(0, 5, line or " ")
+        pdf.output(str(output_path))
+        print(f"[homework] PDF 已保存: {output_path}")
+    except Exception as e:
+        print(f"[homework] PDF 生成失败: {e}")
+
+
+def generate_solution_files(title: str, solution: str, output_dir: Path) -> list[str]:
+    """生成所有格式文件（.md / .py / .pdf / .docx）。"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved = []
+    # MD
+    (output_dir / "_解答.md").write_text(solution, encoding="utf-8")
+    saved.append(str(output_dir / "_解答.md"))
+    # Code files
+    for i, (lang, code) in enumerate(_extract_code_blocks(solution)):
+        ext = lang if lang in ("py", "java", "cpp", "c", "js", "ts", "go") else "txt"
+        p = output_dir / f"_code_{i+1}.{ext}"
+        p.write_text(code, encoding="utf-8")
+        saved.append(str(p))
+    # PDF
+    pdf_path = output_dir / "_解答.pdf"
+    _generate_pdf(title, solution, pdf_path)
+    if pdf_path.exists():
+        saved.append(str(pdf_path))
+    return saved
+
+
 def read_assignment_content(assignment_dir: Path) -> str:
     """读取一个作业目录下所有文件，返回合并文本。"""
     if not assignment_dir.exists():
@@ -230,18 +293,23 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     print(f"[homework] 解题: {course} - {aname}")
     solution = solve_homework(course, aname, content, brief=brief)
 
-    # 保存解答到本地 Markdown 文件
+    # 生成解答文件
+    title = f"{course} — {aname}"
     try:
-        hw_dir.mkdir(parents=True, exist_ok=True)
-        (hw_dir / "_解答.md").write_text(solution, encoding="utf-8")
-        print(f"[homework] 已保存解答到 {hw_dir / '_解答.md'}")
+        files = generate_solution_files(title, solution, hw_dir)
+        print(f"[homework] 已生成 {len(files)} 个文件: {files}")
     except Exception as e:
-        print(f"[homework] 保存解答失败: {e}")
+        print(f"[homework] 文件生成失败: {e}")
+
+    # 飞书回复：显示前 600 字，提示完整文件路径
+    preview = solution[:600]
+    if len(solution) > 600:
+        preview += f"\n\n…（完整解答共 {len(solution)} 字，已保存到电脑）\n{safe_course}/{safe_name}/"
 
     return (
         f"[{idx}] {course} — {aname}\n"
         f"截止：{due_str}（{remaining}）\n\n"
-        f"{solution}"
+        f"{preview}"
     )
 
 
