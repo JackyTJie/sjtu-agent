@@ -185,7 +185,10 @@ def _download_and_analyze_one(d: dict, idx: int) -> str:
     course = d["course"]
     aname = d["name"]
     due_str = d["due"].strftime("%m月%d日 %H:%M") if hasattr(d["due"], 'strftime') else str(d["due"])
-    remaining = d.get("days_left", "?")
+    from datetime import datetime, timezone, timedelta
+    CST = timezone(timedelta(hours=8))
+    days_left = (d["due"] - datetime.now(CST)).days if d.get("due") else "?"
+    remaining = f"{days_left} 天" if isinstance(days_left, int) else "?"
 
     safe_course = re.sub(r'[\\/*?:"<>|]', '_', course)
     safe_name = re.sub(r'[\\/*?:"<>|]', '_', aname)
@@ -194,7 +197,9 @@ def _download_and_analyze_one(d: dict, idx: int) -> str:
     # 下载
     try:
         import ddl_checker as dc
+        cfg = dc.load_config()
         dc.download_assignments(
+            cfg,  # 必需的第一个参数
             course_filter=course, assignment_filter=aname,
             output_dir=str(ASSIGNMENTS_DIR), due_within_days=3650,  # 不限天数
         )
@@ -223,11 +228,13 @@ def _format_list(pending: list[dict]) -> str:
     if not pending:
         return "[homework] 暂无未提交的 Canvas 作业"
     lines = [f"共 {len(pending)} 个未提交 Canvas 作业："]
+    from datetime import datetime, timezone, timedelta
+    CST = timezone(timedelta(hours=8))
     for i, d in enumerate(pending):
         course = d["course"]
         aname = d["name"]
         due_str = d["due"].strftime("%m/%d") if hasattr(d["due"], 'strftime') else str(d["due"])
-        days = d.get("days_left", "?")
+        days = (d["due"] - datetime.now(CST)).days if d.get("due") else "?"
         lines.append(f"  [{i}] {course} — {aname}（{due_str}，{days} 天）")
     lines.append("\n/hw do <序号> 下载分析")
     return "\n".join(lines)
