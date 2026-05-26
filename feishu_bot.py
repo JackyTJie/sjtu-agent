@@ -785,6 +785,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             )
         if cmd == "/hw":
             sub = parts[1] if len(parts) > 1 else ""
+            from sjtu_agent.homework_agent import run_homework_check
             if sub == "do":
                 if len(parts) < 3:
                     return "用法：/hw do <序号>"
@@ -792,14 +793,16 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                     idx = int(parts[2])
                 except ValueError:
                     return f"无效序号：{parts[2]}"
-                from sjtu_agent.homework_agent import run_homework_check
-                return "[homework] 正在分析作业…\n\n" + run_homework_check(specific_idx=idx)
+                return "[homework] 正在下载并分析作业…\n\n" + run_homework_check(specific_idx=idx)
+            elif sub == "list":
+                return run_homework_check(list_only=True)
+            elif sub == "due":
+                days = int(parts[2]) if len(parts) > 2 else 3
+                return run_homework_check(due_within_days=days, list_only=True)
             elif sub == "all":
-                from sjtu_agent.homework_agent import run_homework_check
-                return "[homework] 正在分析全部作业…\n\n" + run_homework_check(due_within_days=7)
+                return "[homework] 正在分析全部作业…\n\n" + run_homework_check(due_within_days=3650)
             else:
-                from sjtu_agent.homework_agent import run_homework_check
-                return "[homework] 正在检查作业…\n\n" + run_homework_check()
+                return run_homework_check(list_only=True)
         return f"未知命令：{cmd}。输入 /help 查看可用命令。"
 
 

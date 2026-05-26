@@ -152,98 +152,117 @@ def analyze_homework(course: str, assignment_name: str, content: str,
         return f"[分析失败: {e}]"
 
 
-def run_homework_check(due_within_days: int = 3, specific_idx: int | None = None) -> str:
-    """主入口：检查即将到期的 Canvas 作业，下载并分析。
-
-    Args:
-        due_within_days: 过滤 N 天内到期的作业
-        specific_idx: 如果指定，只处理该序号的作业（0-based）
-    Returns:
-        飞书推送用的文本结果
-    """
+def _fetch_pending() -> list[dict]:
+    """获取所有未提交的 Canvas 作业。"""
     import ddl_checker as dc
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    print(f"[homework] 正在检查 {due_within_days} 天内到期的 Canvas 作业…")
-
-    # 1. 拉取 DDL
     cfg = dc.load_config()
     ddls = dc.fetch_canvas(cfg)
     pending = [d for d in ddls if not d.get("submitted")]
     print(f"[homework] Canvas 共 {len(ddls)} 个作业，{len(pending)} 个未提交")
+    return pending
 
-    # 2. 过滤即将到期
-    now_time = dc.NOW
+
+def _filter_by_due(pending: list[dict], due_within_days: int) -> list[dict]:
+    """按截止天数过滤。due_within_days=0 表示不限制。"""
+    if due_within_days <= 0:
+        return pending
+    import ddl_checker as dc
     from datetime import timedelta
+    now_time = dc.NOW
     window = timedelta(days=due_within_days)
-    due_soon = []
+    filtered = []
     for d in pending:
         due = d.get("due")
         if due and hasattr(due, 'timestamp'):
             remaining = due - now_time
             if remaining <= window and remaining.total_seconds() > 0:
-                due_soon.append(d)
+                filtered.append(d)
+    return filtered
 
-    if not due_soon:
-        msg = f"[homework] 暂无 {due_within_days} 天内到期的 Canvas 作业"
-        print(msg)
-        return msg
 
-    print(f"[homework] {len(due_soon)} 个作业即将到期")
+def _download_and_analyze_one(d: dict, idx: int) -> str:
+    """下载并分析单个作业。"""
+    course = d["course"]
+    aname = d["name"]
+    due_str = d["due"].strftime("%m月%d日 %H:%M") if hasattr(d["due"], 'strftime') else str(d["due"])
+    remaining = d.get("days_left", "?")
 
-    # 3. 如果指定了 specific_idx
-    if specific_idx is not None:
-        if 0 <= specific_idx < len(due_soon):
-            due_soon = [due_soon[specific_idx]]
-        else:
-            return f"[homework] 无效序号：{specific_idx}，共 {len(due_soon)} 个作业（0~{len(due_soon)-1}）"
+    safe_course = re.sub(r'[\\/*?:"<>|]', '_', course)
+    safe_name = re.sub(r'[\\/*?:"<>|]', '_', aname)
+    hw_dir = ASSIGNMENTS_DIR / safe_course / safe_name
 
-    # 4. 下载作业
-    for d in due_soon:
-        course = d["course"]
-        aname = d["name"]
-        print(f"[homework] 下载: {course} - {aname}")
-        try:
-            files = dc.download_canvas_assignment(
-                dc.get_canvas_courses(cfg),  # 需要课程列表
-                course_filter=course,
-                assignment_filter=aname,
-                output_dir=str(ASSIGNMENTS_DIR),
-            )
-        except Exception as e:
-            print(f"[homework] 下载失败 {course}/{aname}: {e}")
-            files = []
+    # 下载
+    try:
+        import ddl_checker as dc
+        dc.download_assignments(
+            course_filter=course, assignment_filter=aname,
+            output_dir=str(ASSIGNMENTS_DIR), due_within_days=3650,  # 不限天数
+        )
+    except Exception as e:
+        print(f"[homework] 下载失败 {course}/{aname}: {e}")
 
-    # 5. 分析每个作业
-    results = []
-    for idx, d in enumerate(due_soon):
-        course = d["course"]
-        aname = d["name"]
-        due_str = d["due"].strftime("%m月%d日 %H:%M") if hasattr(d["due"], 'strftime') else str(d["due"])
-        remaining = d.get("days_left", "?")
-
-        safe_course = re.sub(r'[\\/*?:"<>|]', '_', course)
-        safe_name = re.sub(r'[\\/*?:"<>|]', '_', aname)
-        hw_dir = ASSIGNMENTS_DIR / safe_course / safe_name
-
-        content = read_assignment_content(hw_dir)
-        if "[无可读文件]" in content:
-            results.append(
-                f"**[{idx}] {course} — {aname}**\n"
-                f"  截止：{due_str}（{remaining} 天）\n"
-                f"  {content}"
-            )
-            continue
-
-        print(f"[homework] 分析: {course} - {aname}")
-        analysis = analyze_homework(course, aname, content)
-        results.append(
+    content = read_assignment_content(hw_dir)
+    if "[无可读文件]" in content:
+        return (
             f"**[{idx}] {course} — {aname}**\n"
-            f"  截止：{due_str}（{remaining} 天）\n\n"
-            f"{analysis}"
+            f"  截止：{due_str}（{remaining} 天）\n"
+            f"  {content}"
         )
 
-    return "\n\n---\n\n".join(results)
+    print(f"[homework] 分析: {course} - {aname}")
+    analysis = analyze_homework(course, aname, content)
+    return (
+        f"**[{idx}] {course} — {aname}**\n"
+        f"  截止：{due_str}（{remaining} 天）\n\n"
+        f"{analysis}"
+    )
+
+
+def _format_list(pending: list[dict]) -> str:
+    """格式化作业列表。"""
+    if not pending:
+        return "[homework] 暂无未提交的 Canvas 作业"
+    lines = [f"共 {len(pending)} 个未提交 Canvas 作业："]
+    for i, d in enumerate(pending):
+        course = d["course"]
+        aname = d["name"]
+        due_str = d["due"].strftime("%m/%d") if hasattr(d["due"], 'strftime') else str(d["due"])
+        days = d.get("days_left", "?")
+        lines.append(f"  [{i}] {course} — {aname}（{due_str}，{days} 天）")
+    lines.append("\n/hw do <序号> 下载分析")
+    return "\n".join(lines)
+
+
+def run_homework_check(due_within_days: int = 0, specific_idx: int | None = None,
+                       list_only: bool = False) -> str:
+    """主入口：列出或分析 Canvas 作业。
+
+    Args:
+        due_within_days: 过滤 N 天内到期（0=不限）
+        specific_idx: 分析指定序号（0-based）
+        list_only: 仅列出，不下载分析
+    """
+    pending = _fetch_pending()
+    if due_within_days > 0:
+        pending = _filter_by_due(pending, due_within_days)
+        print(f"[homework] 过滤后 {len(pending)} 个 {due_within_days} 天内到期")
+
+    if not pending:
+        label = f"{due_within_days} 天内" if due_within_days > 0 else ""
+        return f"[homework] 暂无{label}未提交的 Canvas 作业"
+
+    # 仅列出
+    if list_only:
+        return _format_list(pending)
+
+    # 分析指定作业
+    if specific_idx is not None:
+        if 0 <= specific_idx < len(pending):
+            return _download_and_analyze_one(pending[specific_idx], specific_idx)
+        return f"[homework] 无效序号：{specific_idx}，共 {len(pending)} 个（0~{len(pending)-1}）"
+
+    # 默认：列出
+    return _format_list(pending)
 
 
 def run_homework_check_and_push(due_within_days: int = 3,
