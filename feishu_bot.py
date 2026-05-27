@@ -821,7 +821,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 # /hw past [do <idx>]
                 rest = parts[2] if len(parts) > 2 else ""
                 rest_parts = rest.split(maxsplit=1)
-                if rest_parts[0] == "do":
+                if rest_parts and rest_parts[0] == "do":
                     try:
                         idx = int(rest_parts[1])
                     except (ValueError, IndexError):
