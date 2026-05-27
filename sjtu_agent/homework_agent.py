@@ -374,32 +374,18 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
     except Exception:
         pass
 
-    prompt = f"""你是上海交通大学的学霸。在当前工作目录中完成作业并生成文件。
+    prompt = f"""在当前目录完成{aname}（{course}）。{user_ctx}
 
-课程：{course}
-作业名称：{aname}{user_ctx}
-
-**必须遵守的规则**：
-- 禁止提出任何问题！禁止要求确认！禁止等待回复！
-- 所有文件操作直接执行（--dangerously-skip-permissions 已开启）
-- 个人信息缺失时用 [待填写] 占位，不要停下来问
-- 无论是否完美，都要完成并输出结果
-- 最后输出 200 字摘要，以 "SUMMARY:" 开头
-
-工作流程：
-1. 读取目录中的 description.html 和所有附件
-2. 逐题解答（编程题给代码，数学题分步推导）
-3. 将解答写入 _解答.md，代码文件单独保存为 .py/.java 等
-4. 输出 SUMMARY
-
-输出格式指南（根据作业名称自动判断）：
-- 含"代码/编程/code/C/C++/Python" → 额外保存 .py/.c/.cpp/.java 等代码文件，附 README.md
-- 含"PPT/展示/汇报/pre" → 在 _解答.md 中给出 PPT 大纲（每页标题+要点）
-- 一般作业（物理/数学/信号等） → _解答.md + _解答.html（含 MathJax 公式渲染）
-- 含"论文/报告/report" → 输出结构化文档（摘要/引言/方法/结果/结论）
-- 将解答保存为 _解答.md
-- 代码单独保存为 .py 等文件
-- 如果是 LaTeX 公式，在解答中正确排版"""
+铁律（违反即失败）：
+1. 禁止任何形式的提问/确认/等待——必须直接完成
+2. 先读完 description.html 和所有附件，再动笔
+3. 按以下规则选择输出格式（照做，不推断）：
+   - 含"代码/Python/C/Java/编程" → 必须生成 .py/.c/.java 文件 + README.md
+   - 含"PPT/展示/汇报" → _解答.md 内输出每页标题+要点大纲
+   - 物理/数学/信号/电路 → 公式用 $$...$$ 包裹，额外生成 _解答.html
+   - 含"论文/报告" → 结构：摘要/引言/方法/结果/结论
+   - 其他 → _解答.md + _解答.html
+4. 逐题解答写入 _解答.md，最后输出 "SUMMARY:" 开头的 200 字摘要"""
 
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
