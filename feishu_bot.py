@@ -849,6 +849,8 @@ def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None
         else:
             _reply_text(message_id, "[homework] 命令执行完毕但无结果")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"[feishu] /hw 命令异常: {e}")
         _reply_text(message_id, f"[homework] 出错：{e}")
 
