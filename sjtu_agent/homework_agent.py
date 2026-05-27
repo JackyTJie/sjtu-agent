@@ -401,13 +401,12 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
             print(f"  stderr: {result.stderr[:200]}")
             return solve_homework(course, aname, content, brief=brief)
 
-        # 提取 SUMMARY 部分作为飞书回复
+        # 提取 SUMMARY 作为飞书回复
         summary_marker = "SUMMARY:"
         if summary_marker in output:
             idx = output.index(summary_marker)
             summary = output[idx + len(summary_marker):].strip()[:500]
             return summary + f"\n\n完整解答已保存到 {hw_dir}"
-        # 没有 SUMMARY 标记，返回最后 500 字
         return output[-500:] + f"\n\n完整解答已保存到 {hw_dir}"
     except subprocess.TimeoutExpired:
         print("[homework] Claude Code 超时，回退 API")
@@ -454,25 +453,23 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
         )
 
     print(f"[homework] 解题: {course} - {aname}")
-    solution = _claude_code_solve(hw_dir, course, aname, content, brief=brief)
+    feishu_reply = _claude_code_solve(hw_dir, course, aname, content, brief=brief)
 
-    # 生成解答文件
+    # 生成解答文件（从 Claude Code 写入的 _解答.md 读取完整内容）
+    solution_path = hw_dir / "_解答.md"
+    full_solution = solution_path.read_text(encoding="utf-8") if solution_path.exists() else feishu_reply
     title = f"{course} — {aname}"
     try:
-        files = generate_solution_files(title, solution, hw_dir)
+        files = generate_solution_files(title, full_solution, hw_dir)
         print(f"[homework] 已生成 {len(files)} 个文件: {files}")
     except Exception as e:
         print(f"[homework] 文件生成失败: {e}")
 
-    # 飞书回复：显示前 600 字，提示完整文件路径
-    preview = solution[:600]
-    if len(solution) > 600:
-        preview += f"\n\n…（完整解答共 {len(solution)} 字，已保存到电脑）\n{safe_course}/{safe_name}/"
-
+    # 飞书回复
     return (
         f"[{idx}] {course} — {aname}\n"
         f"截止：{due_str}（{remaining}）\n\n"
-        f"{preview}"
+        f"{feishu_reply}"
     )
 
 
