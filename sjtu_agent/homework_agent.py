@@ -104,22 +104,15 @@ def _extract_code_blocks(md_text: str) -> list[tuple[str, str]]:
 
 
 def generate_solution_files(title: str, solution: str, output_dir: Path) -> list[str]:
-    """生成所有格式文件（.md / .py / .pdf / .docx）。"""
+    """生成 .md + 提取代码文件。PDF/HTML 由 Claude Code 自行生成。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    saved = []
-    # MD
+    saved = [str(output_dir / "_解答.md")]
     (output_dir / "_解答.md").write_text(solution, encoding="utf-8")
-    saved.append(str(output_dir / "_解答.md"))
-    # Code files
     for i, (lang, code) in enumerate(_extract_code_blocks(solution)):
         ext = lang if lang in ("py", "java", "cpp", "c", "js", "ts", "go") else "txt"
         p = output_dir / f"_code_{i+1}.{ext}"
         p.write_text(code, encoding="utf-8")
         saved.append(str(p))
-    # PDF 由 Claude Code 通过 xelatex 编译生成（_解答.pdf）
-    pdf_path = output_dir / "_解答.pdf"
-    if pdf_path.exists():
-        saved.append(str(pdf_path))
     return saved
 
 
@@ -279,8 +272,7 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
    - 含"论文/报告" → 结构：摘要/引言/方法/结果/结论
    - 其他 → _解答.md + _解答.html
 4. 逐题解答写入 _解答.md
-5. 生成 _解答.tex（ctexart 文档类）并运行 xelatex 编译为 _解答.pdf
-6. 输出 "SUMMARY:" 开头的 200 字摘要"""
+5. 输出 "SUMMARY:" 开头的 200 字摘要"""
 
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
