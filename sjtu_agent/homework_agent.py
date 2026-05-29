@@ -272,9 +272,9 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
    - 含"论文/报告" → 结构：摘要/引言/方法/结果/结论
    - 其他 → _解答.md + _解答.html
 4. 逐题解答写入 _解答.md
-5. 编写 _解答.tex 并运行 xelatex 编译成 _解答.pdf：使用 \\usepackage[hmargin=2.5cm,vmargin=2.5cm]{geometry} 和 \\pagestyle{plain} 确保页号统一在底部居中
+5. 编写 _解答.tex 并运行 xelatex 编译成 _解答.pdf：使用 \\usepackage[hmargin=2.5cm,vmargin=2.5cm]{{geometry}} 和 \\pagestyle{{plain}} 确保页号统一在底部居中
 6. **所有数学表达式（2^n、x_i、α+β、log n 等）必须用 $...$（行内）或 $$...$$（独立行）包裹，严禁在正文中裸写数学符号。**
-6. 输出 "SUMMARY:" 开头的 200 字摘要"""
+7. 输出 "SUMMARY:" 开头的 200 字摘要"""
 
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
