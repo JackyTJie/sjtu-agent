@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import struct
 import subprocess
 import sys
 import threading
@@ -72,42 +71,11 @@ def stop_bot() -> str:
         return f"停止失败: {e}"
 
 
-# ── 图标生成 ─────────────────────────────────────────────────────────────────
+# ── 图标 ─────────────────────────────────────────────────────────────────────
 
-def _generate_icon() -> Path:
-    """生成一个 32x32 蓝色 SJ 图标（ICO 格式）。"""
-    ico_path = ROOT / "install" / "sjtu_agent.ico"
-    if ico_path.exists():
-        return ico_path
-
-    # 32x32 蓝色方块 + 白色边框的 BMP 数据
-    # ICO = ICO header + BMP info header + pixel data (32-bit BGRA)
-    w, h = 32, 32
-    pixels = bytearray(w * h * 4)
-    for y in range(h):
-        for x in range(w):
-            idx = (y * w + x) * 4
-            # 蓝色背景，白色边框
-            if x < 2 or x >= w - 2 or y < 2 or y >= h - 2:
-                pixels[idx:idx+4] = b'\xff\xff\xff\xff'  # BGRA white
-            else:
-                pixels[idx:idx+4] = b'\x50\x90\xc8\xff'  # BGRA blue
-
-    # BMP info header (40 bytes)
-    bmp_size = 40 + len(pixels)
-    bmp_header = struct.pack('<IiiHHIIiiII',
-        40, w, h * 2, 1, 32, 0, len(pixels), 0, 0, 0, 0)
-
-    # ICO header (6 bytes) + ICO dir entry (16 bytes)
-    ico_data = struct.pack('<HHH', 0, 1, 1)  # reserved, type=1 (ICO), count=1
-    ico_data += struct.pack('<BBBBHHII',
-        w, h, 0, 0, 1, 32, bmp_size, 22)  # dir entry (offset 22 = 6+16)
-
-    try:
-        ico_path.write_bytes(ico_data + bmp_header + bytes(pixels))
-    except Exception:
-        return ico_path  # 写失败就跳过图标
-    return ico_path
+def _get_icon() -> Path:
+    """返回启动器图标路径。图标文件 install/sjtu_agent.ico 已内置在仓库中。"""
+    return ROOT / "install" / "sjtu_agent.ico"
 
 
 # ── GUI ─────────────────────────────────────────────────────────────────────
@@ -121,7 +89,7 @@ class LauncherApp:
         self.root.configure(bg="#1e1e2e")
 
         # 自定义图标
-        icon = _generate_icon()
+        icon = _get_icon()
         if icon.exists():
             self.root.iconbitmap(default=str(icon))
 
