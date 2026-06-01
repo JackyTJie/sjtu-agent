@@ -1,4 +1,4 @@
-"""飞书 Bot Windows 桌面启动器 — 无需命令行，一键启动/停止/查看状态。
+"""SJTU Agent Windows 桌面启动器 — 无需命令行，一键管理飞书 Bot + 邮件监控。
 
 双击此文件即可运行（关联 pythonw.exe），不会弹出终端窗口。
 """
@@ -15,9 +15,8 @@ from tkinter import messagebox, scrolledtext
 ROOT = Path(__file__).resolve().parent.parent
 VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 BOT_SCRIPT = ROOT / "scripts" / "feishu_bot.py"
-SESSION_NAME = "feishu-bot"
+EMAIL_SCRIPT = ROOT / "scripts" / "email_watcher.py"
 
-# 禁止子进程弹出控制台窗口
 if sys.platform == "win32":
     _NO_WINDOW = subprocess.CREATE_NO_WINDOW
     _STARTUP = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW,
@@ -27,6 +26,8 @@ else:
     _STARTUP = None
 
 
+# ── psmux 工具函数 ──────────────────────────────────────────────────────────
+
 def _run_psmux(*args: str, timeout: int = 10) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["psmux", *args],
@@ -35,65 +36,123 @@ def _run_psmux(*args: str, timeout: int = 10) -> subprocess.CompletedProcess:
     )
 
 
-def bot_running() -> bool:
+def session_running(name: str) -> bool:
     try:
-        result = _run_psmux("has-session", "-t", SESSION_NAME, timeout=5)
+        result = _run_psmux("has-session", "-t", name, timeout=5)
         return result.returncode == 0
     except Exception:
         return False
 
 
-def start_bot() -> str:
-    if bot_running():
-        return "Bot 已在运行中"
+def start_session(name: str, script: Path) -> str:
+    if session_running(name):
+        return f"{name} 已在运行中"
     try:
-        _run_psmux("kill-session", "-t", SESSION_NAME, timeout=5)
+        _run_psmux("kill-session", "-t", name, timeout=5)
     except Exception:
         pass
     result = subprocess.run(
-        ["psmux", "new", "-s", SESSION_NAME, "-d", "--",
-         str(VENV_PYTHON), str(BOT_SCRIPT)],
+        ["psmux", "new", "-s", name, "-d", "--",
+         str(VENV_PYTHON), str(script)],
         capture_output=True, text=True, timeout=15,
         creationflags=_NO_WINDOW, startupinfo=_STARTUP,
     )
     if result.returncode == 0:
-        return f"Bot 已启动 (session: {SESSION_NAME})"
+        return f"{name} 已启动"
     return f"启动失败: {result.stderr.strip() or '未知错误'}"
 
 
-def stop_bot() -> str:
-    if not bot_running():
-        return "Bot 未在运行"
+def stop_session(name: str) -> str:
+    if not session_running(name):
+        return f"{name} 未在运行"
     try:
-        _run_psmux("kill-session", "-t", SESSION_NAME, timeout=10)
-        return "Bot 已停止"
+        _run_psmux("kill-session", "-t", name, timeout=10)
+        return f"{name} 已停止"
     except Exception as e:
         return f"停止失败: {e}"
 
 
-# ── 图标 ─────────────────────────────────────────────────────────────────────
-
 def _get_icon() -> Path:
-    """返回启动器图标路径。图标文件 install/sjtu_agent.ico 已内置在仓库中。"""
     return ROOT / "install" / "sjtu_agent.ico"
 
 
-# ── GUI ─────────────────────────────────────────────────────────────────────
+# ── 单个服务的按钮+状态组件 ─────────────────────────────────────────────────
+
+class ServiceRow(tk.Frame):
+    def __init__(self, parent, name: str, label: str, session: str,
+                 script: Path, fg, btn_bg, green, red, accent, log_fn):
+        super().__init__(parent, bg=parent["bg"])
+        self.name = name
+        self.session = session
+        self.script = script
+        self.green = green
+        self.red = red
+        self.fg = fg
+        self.btn_bg = btn_bg
+        self.accent = accent
+        self.log = log_fn
+
+        tk.Label(self, text=label, font=("Segoe UI", 12, "bold"),
+                 fg=fg, bg=parent["bg"]).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.start_btn = tk.Button(self, text="▶ 启动", font=("Segoe UI", 10),
+                                    fg=green, bg=btn_bg, width=6,
+                                    command=self._start)
+        self.start_btn.pack(side=tk.LEFT, padx=3)
+
+        self.stop_btn = tk.Button(self, text="■ 停止", font=("Segoe UI", 10),
+                                   fg=red, bg=btn_bg, width=6,
+                                   command=self._stop)
+        self.stop_btn.pack(side=tk.LEFT, padx=3)
+
+        self.status_label = tk.Label(self, text="○", font=("Segoe UI", 11),
+                                     fg=fg, bg=parent["bg"])
+        self.status_label.pack(side=tk.LEFT, padx=10)
+
+    def refresh(self):
+        running = session_running(self.session)
+        self.status_label.config(
+            text="● 运行中" if running else "○ 未运行",
+            fg=self.green if running else self.fg,
+        )
+
+    def _start(self):
+        self.start_btn.config(state=tk.DISABLED)
+        self.log(f"[{self.name}] 正在启动…")
+        threading.Thread(target=self._do_start, daemon=True).start()
+
+    def _do_start(self):
+        msg = start_session(self.session, self.script)
+        self.after(0, lambda: self.log(f"[{self.name}] {msg}"))
+        self.after(0, self.refresh)
+        self.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
+
+    def _stop(self):
+        self.stop_btn.config(state=tk.DISABLED)
+        self.log(f"[{self.name}] 正在停止…")
+        threading.Thread(target=self._do_stop, daemon=True).start()
+
+    def _do_stop(self):
+        msg = stop_session(self.session)
+        self.after(0, lambda: self.log(f"[{self.name}] {msg}"))
+        self.after(0, self.refresh)
+        self.after(0, lambda: self.stop_btn.config(state=tk.NORMAL))
+
+
+# ── 主窗口 ──────────────────────────────────────────────────────────────────
 
 class LauncherApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("SJTU Agent — 飞书 Bot 启动器")
-        self.root.geometry("580x460")
+        self.root.title("SJTU Agent 启动器")
+        self.root.geometry("600x360")
         self.root.resizable(True, True)
         self.root.configure(bg="#1e1e2e")
 
-        # 自定义图标
         icon = _get_icon()
         if icon.exists():
             self.root.iconbitmap(default=str(icon))
 
-        # 字体和颜色
         self.fg = "#cdd6f4"
         self.bg = "#1e1e2e"
         self.btn_bg = "#313244"
@@ -101,85 +160,50 @@ class LauncherApp:
         self.green = "#a6e3a1"
         self.red = "#f38ba8"
 
-        # 标题
-        title = tk.Label(self.root, text="飞书 Bot 启动器", font=("Segoe UI", 18, "bold"),
-                         fg=self.accent, bg=self.bg)
-        title.pack(pady=(20, 5))
+        tk.Label(self.root, text="SJTU Agent 启动器", font=("Segoe UI", 16, "bold"),
+                 fg=self.accent, bg=self.bg).pack(pady=(15, 5))
+        tk.Label(self.root, text="Windows — 无需命令行，一键管理后台服务",
+                 font=("Segoe UI", 9), fg=self.fg, bg=self.bg).pack(pady=(0, 10))
 
-        sub = tk.Label(self.root, text="SJTU Agent — 无需命令行, 一键管理 Bot 进程",
-                       font=("Segoe UI", 9), fg=self.fg, bg=self.bg)
-        sub.pack(pady=(0, 15))
+        # 飞书 Bot 行
+        self.bot_row = ServiceRow(
+            self.root, "feishu-bot", "🪶 飞书 Bot",
+            "feishu-bot", BOT_SCRIPT,
+            self.fg, self.btn_bg, self.green, self.red, self.accent,
+            self._log,
+        )
+        self.bot_row.pack(pady=5, padx=20, fill=tk.X)
 
-        # 按钮区域
-        btn_frame = tk.Frame(self.root, bg=self.bg)
-        btn_frame.pack(pady=5)
+        # 分隔线
+        tk.Frame(self.root, height=1, bg="#45475a").pack(fill=tk.X, padx=20, pady=5)
 
-        self.start_btn = tk.Button(btn_frame, text="▶  启动 Bot", font=("Segoe UI", 12),
-                                   fg=self.green, bg=self.btn_bg, activebackground=self.btn_bg,
-                                   width=12, command=self._start)
-        self.start_btn.pack(side=tk.LEFT, padx=10)
+        # 邮件监控行
+        self.email_row = ServiceRow(
+            self.root, "email-watcher", "📧 邮件监控",
+            "email-watcher", EMAIL_SCRIPT,
+            self.fg, self.btn_bg, self.green, self.red, self.accent,
+            self._log,
+        )
+        self.email_row.pack(pady=5, padx=20, fill=tk.X)
 
-        self.stop_btn = tk.Button(btn_frame, text="■  停止 Bot", font=("Segoe UI", 12),
-                                  fg=self.red, bg=self.btn_bg, activebackground=self.btn_bg,
-                                  width=12, command=self._stop)
-        self.stop_btn.pack(side=tk.LEFT, padx=10)
-
-        self.status_btn = tk.Button(btn_frame, text="⟳  刷新状态", font=("Segoe UI", 12),
-                                    fg=self.accent, bg=self.btn_bg, activebackground=self.btn_bg,
-                                    width=12, command=self._refresh)
-        self.status_btn.pack(side=tk.LEFT, padx=10)
-
-        # 状态指示器
-        self.status_label = tk.Label(self.root, text="○ 未运行", font=("Segoe UI", 14),
-                                     fg=self.fg, bg=self.bg)
-        self.status_label.pack(pady=(15, 5))
-
-        # 日志/输出区域
+        # 日志区域
         self.output = scrolledtext.ScrolledText(
-            self.root, height=12, font=("Cascadia Code", 9),
+            self.root, height=8, font=("Cascadia Code", 9),
             bg="#11111b", fg="#cdd6f4", insertbackground=self.fg,
             relief=tk.FLAT, borderwidth=0,
         )
-        self.output.pack(fill=tk.BOTH, expand=True, padx=20, pady=(5, 20))
+        self.output.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 15))
 
-        self._refresh()
+        self._refresh_all()
         self.root.mainloop()
 
     def _log(self, msg: str) -> None:
         self.output.insert(tk.END, msg + "\n")
         self.output.see(tk.END)
 
-    def _set_status(self, text: str, color: str) -> None:
-        self.status_label.config(text=text, fg=color)
-
-    def _start(self) -> None:
-        self.start_btn.config(state=tk.DISABLED)
-        self._log("正在启动 Bot…")
-        threading.Thread(target=self._do_start, daemon=True).start()
-
-    def _do_start(self) -> None:
-        msg = start_bot()
-        self.root.after(0, lambda: self._log(msg))
-        self.root.after(0, self._refresh)
-        self.root.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
-
-    def _stop(self) -> None:
-        self.stop_btn.config(state=tk.DISABLED)
-        self._log("正在停止 Bot…")
-        threading.Thread(target=self._do_stop, daemon=True).start()
-
-    def _do_stop(self) -> None:
-        msg = stop_bot()
-        self.root.after(0, lambda: self._log(msg))
-        self.root.after(0, self._refresh)
-        self.root.after(0, lambda: self.stop_btn.config(state=tk.NORMAL))
-
-    def _refresh(self) -> None:
-        running = bot_running()
-        if running:
-            self._set_status("● 运行中", self.green)
-        else:
-            self._set_status("○ 未运行", self.fg)
+    def _refresh_all(self) -> None:
+        self.bot_row.refresh()
+        self.email_row.refresh()
 
 
 if __name__ == "__main__":
