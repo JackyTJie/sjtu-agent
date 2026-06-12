@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from sjtu_agent.notifications import send_notification
 
 
@@ -42,3 +44,91 @@ def test_send_notification_test_mode_does_not_send(monkeypatch):
 
     assert result["ok"] is True
     assert result["would_send"][0]["channel"] == "system"
+
+
+from scripts import canvas_watcher
+
+
+class FakeWatcherClient:
+    def __init__(self, announcements=None, quizzes=None, assignments=None):
+        self._courses = [{"course_id": 1, "name": "Signals", "course_code": "ECE2300"}]
+        self._announcements = announcements or []
+        self._quizzes = quizzes or []
+        self._assignments = assignments or []
+
+    def list_courses(self):
+        return {"ok": True, "count": len(self._courses), "courses": self._courses}
+
+    def list_announcements(self, course_id, limit=50, since_days=None):
+        return {"ok": True, "count": len(self._announcements), "announcements": self._announcements}
+
+    def list_quizzes(self, course_id, include_past=True, include_assignment_backed=True):
+        return {"ok": True, "quiz_status": "enabled", "count": len(self._quizzes), "quizzes": self._quizzes, "warnings": []}
+
+    def list_assignments(self, course_id, include_past=True):
+        return {"ok": True, "count": len(self._assignments), "assignments": self._assignments}
+
+
+def test_first_run_baselines_without_notifications(tmp_path, monkeypatch):
+    state_path = tmp_path / "canvas_state.json"
+    sent = []
+    client = FakeWatcherClient(announcements=[{"id": 10, "title": "Exam", "summary": "Read", "posted_at": "2026-06-01", "html_url": "u"}])
+    monkeypatch.setattr(canvas_watcher, "send_notification", lambda *args, **kwargs: sent.append((args, kwargs)))
+
+    result = canvas_watcher.check_once(
+        cfg={"canvas_monitor": {"baseline_on_first_run": True, "notify_channels": ["system"]}},
+        client=client,
+        state_path=state_path,
+        test_mode=False,
+    )
+
+    assert result["ok"] is True
+    assert result["baseline_created"] is True
+    assert sent == []
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "announcement:1:10" in saved["items"]
+
+
+def test_new_announcement_after_baseline_notifies(tmp_path, monkeypatch):
+    state_path = tmp_path / "canvas_state.json"
+    state_path.write_text(json.dumps({"items": {}, "last_checked_at": "2026-06-01T00:00:00+08:00"}), encoding="utf-8")
+    sent = []
+    client = FakeWatcherClient(announcements=[{"id": 10, "title": "Exam", "summary": "Read", "posted_at": "2026-06-01", "html_url": "u"}])
+    monkeypatch.setattr(canvas_watcher, "send_notification", lambda *args, **kwargs: sent.append((args, kwargs)) or {"ok": True, "sent": [{"channel": "system"}]})
+
+    result = canvas_watcher.check_once(
+        cfg={"canvas_monitor": {"baseline_on_first_run": True, "notify_channels": ["system"]}},
+        client=client,
+        state_path=state_path,
+        test_mode=False,
+    )
+
+    assert result["events_count"] == 1
+    assert sent
+    assert sent[0][0][1] == "Canvas 新公告"
+
+
+def test_quiz_due_change_notifies(tmp_path, monkeypatch):
+    state_path = tmp_path / "canvas_state.json"
+    state_path.write_text(json.dumps({
+        "items": {
+            "quiz:1:5": {
+                "signature": {"title": "Quiz", "due_at": "old", "unlock_at": None, "lock_at": None, "published": True, "locked_for_user": False, "question_count": 1, "points_possible": 10}
+            }
+        },
+        "last_checked_at": "2026-06-01T00:00:00+08:00",
+    }), encoding="utf-8")
+    sent = []
+    client = FakeWatcherClient(quizzes=[{"quiz_id": 5, "title": "Quiz", "due_at": "new", "unlock_at": None, "lock_at": None, "published": True, "locked_for_user": False, "question_count": 1, "points_possible": 10, "html_url": "u"}])
+    monkeypatch.setattr(canvas_watcher, "send_notification", lambda *args, **kwargs: sent.append((args, kwargs)) or {"ok": True})
+
+    result = canvas_watcher.check_once(
+        cfg={"canvas_monitor": {"baseline_on_first_run": True, "notify_channels": ["system"]}},
+        client=client,
+        state_path=state_path,
+        test_mode=False,
+    )
+
+    assert result["events_count"] == 1
+    assert "due_at" in result["events"][0]["changed_fields"]
+    assert sent[0][0][1] == "Canvas Quiz 时间变化"
