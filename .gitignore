@@ -36,6 +36,9 @@ build/
 com.sjtu.*.plist
 *.log
 
+# Security audit (local-only, not for distribution)
+docs/SECURITY_AUDIT.md
+
 # Session summaries
 sessions/
 
