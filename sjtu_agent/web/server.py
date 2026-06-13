@@ -735,7 +735,6 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -771,9 +770,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
         self.end_headers()
 
     def do_GET(self):
@@ -791,14 +789,21 @@ class _Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             key = qs.get("key", [""])[0]
             ilink_base = qs.get("ilink_base", ["https://ilinkai.weixin.qq.com"])[0]
-            if not key:
+            from urllib.parse import urlparse as _urlparse
+            _host = _urlparse(ilink_base).hostname or ""
+            if _host not in ("ilinkai.weixin.qq.com", "api.weixin.qq.com"):
+                self._send_json({"status": "error", "error": "invalid ilink_base"}, 400)
+            elif not key:
                 self._send_json({"status": "error", "error": "missing key"}, 400)
             else:
                 self._send_json(_wechat_qr_status(key, ilink_base))
         else:
-            # 尝试静态文件
-            file_path = STATIC_DIR / path.lstrip("/")
-            if file_path.exists() and file_path.is_file():
+            # 尝试静态文件 — 防路径遍历
+            file_path = (STATIC_DIR / path.lstrip("/")).resolve()
+            if not file_path.is_relative_to(STATIC_DIR.resolve()):
+                self._send_json({"error": "not found"}, status=404)
+                return
+            if file_path.is_file():
                 self._send_file(file_path)
             else:
                 self.send_response(404)
@@ -829,7 +834,6 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("X-Accel-Buffering", "no")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             for chunk in _stream_chat(user_msg):
                 try:

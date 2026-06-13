@@ -21,6 +21,7 @@ remind_check.py — 后台提醒检查脚本，由 launchd 每分钟调用。
 """
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -116,7 +117,7 @@ def _open_url(url: str) -> None:
         if sys.platform == "darwin":
             subprocess.run(["open", url], check=True, capture_output=True, timeout=5)
         elif sys.platform == "win32":
-            subprocess.run(["start", url], shell=True, timeout=5)
+            os.startfile(url)
         else:
             subprocess.run(["xdg-open", url], check=True, capture_output=True, timeout=5)
     except Exception as e:

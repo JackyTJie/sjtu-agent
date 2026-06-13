@@ -1508,7 +1508,7 @@ async function sendChat() {
         try { evt = JSON.parse(payload); } catch { continue; }
 
         if (evt.error) {
-          bubble.innerHTML = '<p style="color:var(--red)">❌ ' + evt.error + '</p>';
+          bubble.textContent = '❌ ' + evt.error;
           break;
         }
 
@@ -1557,7 +1557,7 @@ async function sendChat() {
       bubble.innerHTML = '<p style="color:var(--text3)">(已完成)</p>';
     }
   } catch (e) {
-    bubble.innerHTML = '<p style="color:var(--red)">❌ 请求失败：' + e.message + '</p>';
+    bubble.textContent = '❌ 请求失败：' + e.message;
   } finally {
     isSending = false;
     document.getElementById('btn-send').disabled = false;
