@@ -63,6 +63,15 @@ def tool_execute_python(code: str, timeout: int = 60) -> dict:
     )
     full_code = preamble + "\n" + code
 
+    # 剥离敏感环境变量，防止代码执行泄露凭据
+    import os as _os
+    _sensitive_keys = {
+        "JACCOUNT_PASSWORD", "MOOC_PASSWORD", "ZHIYUAN_API_KEY",
+        "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
+        "EMAIL_PASSWORD",
+    }
+    env = {k: v for k, v in _os.environ.items() if k not in _sensitive_keys}
+
     try:
         result = _sp.run(
             [_sys.executable, "-c", full_code],
@@ -70,6 +79,7 @@ def tool_execute_python(code: str, timeout: int = 60) -> dict:
             text=True,
             timeout=timeout,
             cwd=str(PROJECT_ROOT),
+            env=env,
         )
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()

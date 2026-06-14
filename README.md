@@ -187,6 +187,10 @@ sjtu-agent install-parse-backends --backend whisper
 - `.env` — jAccount 账号密码、致远一号 API Key
 - `agent_config.json` — 大模型配置（已有 `ZHIYUAN_API_KEY` 则不需要）
 
+### 安全说明
+
+凭据（API Key、密码、Token）以明文存储在本地文件中。Web UI 需要 `?token=xxx` 访问令牌（首次启动打印在终端）。`execute_python` 工具执行时会自动剥离敏感环境变量。建议保持运行时数据目录为私有（macOS/Linux 已自动设为 `0o600`）。
+
 ### 环境变量
 
 | 变量 | 用途 |
