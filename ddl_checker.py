@@ -655,7 +655,8 @@ def _solve_captcha_phycai(img_bytes: bytes) -> str:
     try:
         os.unlink(tmp)
     except Exception:
-        pass
+        import atexit as _atexit
+        _atexit.register(lambda: os.unlink(tmp) if os.path.exists(tmp) else None)
     return code
 
 

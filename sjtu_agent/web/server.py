@@ -26,11 +26,12 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 _WEB_TOKEN = ""
 
 def _check_auth(handler) -> bool:
-    """Check the ?token= query parameter against the stored web token."""
-    from urllib.parse import parse_qs, urlparse
-    qs = parse_qs(urlparse(handler.path).query)
-    token = qs.get("token", [""])[0]
-    return token and token == _WEB_TOKEN
+    """Check the sjtu_token cookie against the stored web token."""
+    import http.cookies
+    cookie_header = handler.headers.get("Cookie", "")
+    cookies = http.cookies.SimpleCookie(cookie_header)
+    token = cookies.get("sjtu_token")
+    return token and token.value == _WEB_TOKEN
 
 # ── 预设 API 提供商 ──────────────────────────────────────────────────────────
 
@@ -787,7 +788,14 @@ class _Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
 
         if path in ("/", "/index.html"):
-            self._send_file(STATIC_DIR / "index.html")
+            self.send_response(200)
+            self.send_header("Set-Cookie", f"sjtu_token={_WEB_TOKEN}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            data = (STATIC_DIR / "index.html").read_bytes()
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         elif path == "/api/config":
             if not _check_auth(self): self._send_json({"error":"unauthorized"}, 403); return
             self._send_json(_get_config_values())
@@ -1052,8 +1060,9 @@ def start(port: int = 7860, open_browser: bool = True) -> None:
     _WEB_TOKEN = _get_or_create_web_token()
 
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
-    url = f"http://127.0.0.1:{port}/?token={_WEB_TOKEN}"
+    url = f"http://127.0.0.1:{port}"
     print(f"\n🌐  SJTU Agent 配置界面已启动：{url}")
+    print(f"     访问令牌（自动通过 Cookie 传递）：{_WEB_TOKEN}")
     print("     按 Ctrl+C 关闭\n")
 
     if open_browser:
