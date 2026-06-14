@@ -20,9 +20,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from sjtu_agent.paths import ENV_PATH, CONFIG_PATH, AGENT_CONFIG_PATH
+from sjtu_agent.paths import ENV_PATH, CONFIG_PATH, AGENT_CONFIG_PATH, _get_or_create_web_token
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_WEB_TOKEN = ""
+
+def _check_auth(handler) -> bool:
+    """Check the ?token= query parameter against the stored web token."""
+    from urllib.parse import parse_qs, urlparse
+    qs = parse_qs(urlparse(handler.path).query)
+    token = qs.get("token", [""])[0]
+    return token and token == _WEB_TOKEN
 
 # ── 预设 API 提供商 ──────────────────────────────────────────────────────────
 
@@ -810,6 +818,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self.end_headers()
 
     def do_POST(self):
+        if not _check_auth(self):
+            self._send_json({"error": "unauthorized"}, status=403)
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -1034,8 +1046,11 @@ class _Handler(BaseHTTPRequestHandler):
 # ── 启动入口 ──────────────────────────────────────────────────────────────────
 
 def start(port: int = 7860, open_browser: bool = True) -> None:
+    global _WEB_TOKEN
+    _WEB_TOKEN = _get_or_create_web_token()
+
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1:{port}/?token={_WEB_TOKEN}"
     print(f"\n🌐  SJTU Agent 配置界面已启动：{url}")
     print("     按 Ctrl+C 关闭\n")
 

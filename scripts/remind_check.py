@@ -223,19 +223,21 @@ def _send_notification(title: str, subtitle: str, body: str) -> None:
                 subprocess.run(["osascript", "-e", script],
                                check=True, capture_output=True, timeout=5)
             elif sys.platform == "win32":
-                # Windows 10+ 内置 PowerShell 通知（不依赖第三方库）
+                # Windows 10+ 内置 PowerShell 通知 — 用环境变量传参，防注入
                 ps_script = (
                     "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
                     "ContentType = WindowsRuntime] | Out-Null; "
+                    "$t = $env:SJTU_TITLE; $m = $env:SJTU_MESSAGE; "
                     "$template = [Windows.UI.Notifications.ToastNotificationManager]"
                     "::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
-                    f'$template.GetElementsByTagName("text")[0].AppendChild($template.CreateTextNode("{title}")) | Out-Null; '
-                    f'$template.GetElementsByTagName("text")[1].AppendChild($template.CreateTextNode("{message}")) | Out-Null; '
+                    '$template.GetElementsByTagName("text")[0].AppendChild($template.CreateTextNode($t)) | Out-Null; '
+                    '$template.GetElementsByTagName("text")[1].AppendChild($template.CreateTextNode($m)) | Out-Null; '
                     "$toast = [Windows.UI.Notifications.ToastNotification]::new($template); "
                     "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('SJTU Agent').Show($toast)"
                 )
+                env = {**os.environ, "SJTU_TITLE": title, "SJTU_MESSAGE": message}
                 subprocess.run(["powershell", "-Command", ps_script],
-                               capture_output=True, timeout=10)
+                               capture_output=True, timeout=10, env=env)
             else:
                 subprocess.run(["notify-send", title, message],
                                check=True, capture_output=True, timeout=5)

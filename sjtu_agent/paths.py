@@ -52,6 +52,27 @@ USER_PROFILE_PATH     = DATA_DIR / "user_profile.json"
 CARE_STATE_PATH       = DATA_DIR / "care_state.json"
 NEWS_HISTORY_PATH     = DATA_DIR / "news_history.json"
 CONVERSATION_LOG_PATH = DATA_DIR / "conversation_log.jsonl"
+WEB_TOKEN_PATH        = DATA_DIR / ".web_token"
+
+
+def _get_or_create_web_token() -> str:
+    """Get or create a random access token for the web UI."""
+    import os as _os
+    if WEB_TOKEN_PATH.exists():
+        try:
+            return WEB_TOKEN_PATH.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    import secrets
+    token = secrets.token_urlsafe(16)
+    WEB_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WEB_TOKEN_PATH.write_text(token, encoding="utf-8")
+    if _os.name != "nt":
+        try:
+            _os.chmod(WEB_TOKEN_PATH, 0o600)
+        except OSError:
+            pass
+    return token
 
 
 def atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
@@ -81,6 +102,11 @@ def atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
             except OSError:
                 pass  # 某些文件系统/平台不支持 fsync
         _os.replace(tmp_path, path)
+        if _os.name != "nt":               # Windows: DACL, not POSIX chmod
+            try:
+                _os.chmod(path, 0o600)     # restrict to owning user
+            except OSError:
+                pass
     except Exception:
         try:
             _os.unlink(tmp_path)
