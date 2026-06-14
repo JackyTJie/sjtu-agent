@@ -78,6 +78,7 @@ def generate_user_api_key(
 
     # Receive, decrypt and check response payload from server.
     enc_payload = input('Paste the response payload here: ')
+    # 注：PKCS1v15 是服务端指定的填充方式，客户端无法单方面更改为 OAEP
     dec_payload = UserApiKeyPayload(**json.loads(private_key.decrypt(
         base64.b64decode(enc_payload),
         padding.PKCS1v15(),

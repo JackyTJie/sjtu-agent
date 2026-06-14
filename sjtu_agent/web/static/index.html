@@ -1444,7 +1444,8 @@ function appendToolCard(name, input) {
   const msgs = document.getElementById('chat-messages');
   const card = document.createElement('div');
   card.className = 'tool-card';
-  const label = TOOL_LABELS[name] || name;
+  const rawLabel = TOOL_LABELS[name] || name;
+  const label = rawLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   card.innerHTML = `
     <div class="tool-head" onclick="this.parentElement.classList.toggle('expanded')">
       <div class="tool-icon"></div>

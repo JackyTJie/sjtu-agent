@@ -1972,7 +1972,7 @@ def tool_save_credentials(
         updated.append("jAccount 用户名")
     if jaccount_password:
         set_env("JACCOUNT_PASSWORD", jaccount_password)
-        os.environ["JACCOUNT_PASSWORD"] = jaccount_password
+        # 不写入 os.environ — 防止被子进程继承泄露
         updated.append("jAccount 密码")
     if mooc_username:
         set_env("MOOC_USERNAME", mooc_username)
@@ -1980,7 +1980,6 @@ def tool_save_credentials(
         updated.append("MOOC 用户名")
     if mooc_password:
         set_env("MOOC_PASSWORD", mooc_password)
-        os.environ["MOOC_PASSWORD"] = mooc_password
         updated.append("MOOC 密码")
 
     if any([jaccount_username, jaccount_password, mooc_username, mooc_password]):

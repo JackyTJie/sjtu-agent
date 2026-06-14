@@ -155,6 +155,11 @@ def _solve_captcha(img_bytes: bytes) -> str:
         os.unlink(tmp)
     except Exception:
         pass
+    else:
+        return code
+    # fallback: register for atexit cleanup
+    import atexit as _atexit
+    _atexit.register(lambda: os.unlink(tmp) if os.path.exists(tmp) else None)
     return code
 
 
