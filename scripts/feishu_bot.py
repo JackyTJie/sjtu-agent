@@ -271,6 +271,15 @@ def _build_date_ctx() -> str:
     )
 
 
+def _inject_memory_ctx(open_id: str, user_msg: str) -> str:
+    """Try to fetch relevant memories from ChromaDB. Returns '' on any failure."""
+    try:
+        from sjtu_agent.memory import build_memory_context
+        return build_memory_context(open_id, user_msg, n=3)
+    except Exception:
+        return ""
+
+
 def _init_messages(sess: dict) -> None:
     if sess["messages"]:
         return
@@ -293,11 +302,14 @@ def _extract_assistant_reply(sess: dict) -> str:
     return "(已完成)"
 
 
-def _capture_turn(sess: dict, user_text: str) -> str:
+def _capture_turn(sess: dict, user_text: str, open_id: str = "") -> str:
     """Run one agent turn, return the assistant reply text."""
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
+        base = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
+        if open_id:
+            base += _inject_memory_ctx(open_id, user_text)
+        sess["messages"][0]["content"] = base
     sess["messages"].append({"role": "user", "content": user_text})
 
     agent._run_one_turn(
@@ -359,10 +371,13 @@ def _model_supports_vision(model: str) -> bool:
     ])
 
 
-def _capture_turn_multimodal(sess: dict, content: list) -> str:
+def _capture_turn_multimodal(sess: dict, content: list, open_id: str = "") -> str:
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
+        base = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
+        if open_id:
+            base += _inject_memory_ctx(open_id, "")
+        sess["messages"][0]["content"] = base
     sess["messages"].append({"role": "user", "content": content})
 
     agent._run_one_turn(
@@ -1205,6 +1220,28 @@ def _build_parser_context(local_path: Path, media_type: str = "file", max_chars:
 
 
 _CAPTURE_TIMEOUT = 120  # 单轮 LLM 调用最大等待秒数
+_MEMORY_EXTRACT_EVERY = 10  # 每 N 轮对话尝试提取一次记忆
+_msg_counters: dict[str, int] = {}  # per-user message counter for memory throttle
+
+
+def _try_extract_memory(open_id: str, conv: dict) -> None:
+    """Throttled memory extraction: every N messages, summarize and store."""
+    cnt = _msg_counters.get(open_id, 0) + 1
+    _msg_counters[open_id] = cnt
+    if cnt % _MEMORY_EXTRACT_EVERY != 0:
+        return
+    try:
+        from sjtu_agent.memory import summarize_session, store_memory
+        summary = summarize_session(conv.get("messages", []))
+        if summary:
+            store_memory(open_id, summary, {
+                "session_name": conv.get("name", ""),
+                "msg_count": len(conv.get("messages", [])),
+                "type": "session_summary",
+            })
+            print(f"[feishu] 记忆已提取: {summary[:60]}...")
+    except Exception as e:
+        print(f"[feishu] 记忆提取失败: {e}")
 
 
 def _run_fn_with_timeout(fn, timeout: float, *args):
@@ -1241,7 +1278,7 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
         _reply_text(message_id, "上一条消息还在处理中，请稍候…")
         return
     try:
-        reply = _run_fn_with_timeout(_capture_turn, _CAPTURE_TIMEOUT, conv, text)
+        reply = _run_fn_with_timeout(_capture_turn, _CAPTURE_TIMEOUT, conv, text, sender_open_id)
     except TimeoutError:
         print(f"[feishu] LLM 调用超时（{_CAPTURE_TIMEOUT}s），释放锁")
         _reply_text(message_id, "处理超时，请稍后重试")
@@ -1252,6 +1289,7 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
         return
     finally:
         _save_sessions()
+        _try_extract_memory(sender_open_id, conv)
         lock.release()
     _reply_text(message_id, reply)
 
@@ -1290,7 +1328,7 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
                     "type": "image_url",
                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
                 })
-            reply = _capture_turn_multimodal(conv, content)
+            reply = _capture_turn_multimodal(conv, content, sender_open_id)
             _reply_text(message_id, reply)
             return
 
@@ -1308,7 +1346,7 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
         else:
             user_text += f"\n\n（附件解析失败：{parse_err}）"
         user_text += "\n\n请根据已提取内容回答；若信息不足，再向用户追问。"
-        reply = _capture_turn(conv, user_text)
+        reply = _capture_turn(conv, user_text, sender_open_id)
         _reply_text(message_id, reply)
 
     try:
