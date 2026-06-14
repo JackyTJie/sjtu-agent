@@ -85,8 +85,8 @@ def search_memory(
             where={"user_id": user_id},
         )
     except Exception:
-        # where clause may fail if collection was created without user_id index
-        results = collection.query(query_texts=[query], n_results=min(n, 10))
+        # where clause failed — return empty rather than leaking all users' memories
+        return []
 
     if not results or not results.get("ids") or not results["ids"][0]:
         return []
@@ -144,12 +144,14 @@ def summarize_session(messages: list[dict]) -> str | None:
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=200,
+            timeout=30,
         )
         text = resp.choices[0].message.content.strip()
         if not text or text.lower() in ("(none)", "none", "无"):
             return None
         return text
-    except Exception:
+    except Exception as e:
+        print(f"[memory] 摘要提取失败: {e}")
         return None
 
 

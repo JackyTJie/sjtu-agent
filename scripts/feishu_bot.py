@@ -1270,9 +1270,13 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
         return
     finally:
         _save_sessions()
-        _try_extract_memory(sender_open_id, conv)
         lock.release()
     _reply_text(message_id, reply)
+    # 记忆提取不阻塞锁 — 在发送回复后异步进行
+    try:
+        _try_extract_memory(sender_open_id, conv)
+    except Exception:
+        pass
 
 
 def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str, content_json: str) -> None:
