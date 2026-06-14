@@ -167,6 +167,10 @@ sjtu-agent install-parse-backends --backend pdf_ocr
 sjtu-agent install-parse-backends --backend whisper
 ```
 
+### 记忆
+
+飞书 Bot 基于 ChromaDB 实现跨会话语义记忆。对话结束后自动提取关键信息（课程、考试、学习偏好），下次对话时检索相关记忆注入上下文。无需配置，首次使用自动初始化。
+
 ---
 
 ## 配置
@@ -262,4 +266,4 @@ sjtu-agent install-daemons
 
 ## 版本
 
-当前版本：**v0.3.1**。发布历史见 [Releases](https://github.com/kuan-er/sjtu-agent/releases)。
+当前版本：**v0.3.2**。发布历史见 [Releases](https://github.com/kuan-er/sjtu-agent/releases)。
