@@ -153,6 +153,27 @@ def summarize_session(messages: list[dict]) -> str | None:
         return None
 
 
+def get_care_suggestions(user_id: str, n: int = 5) -> str | None:
+    """Return a care suggestion string based on recent memories, or None.
+
+    Scans the most recently stored memories for actionable follow-ups:
+    exams coming up, courses the user mentioned, topics they're interested in.
+    """
+    memories = search_memory(user_id, "exam test study course deadline", n=n)
+    if not memories:
+        return None
+
+    recent = [m for m in memories if "备考" in m["text"] or "考试" in m["text"]
+              or "作业" in m["text"] or "截止" in m["text"] or "课程" in m["text"]
+              or "学习" in m["text"] or "准备" in m["text"]]
+    if not recent:
+        return None
+
+    return "基于你对以下内容的关注：" + "；".join(
+        m["text"][:80] for m in recent[:3]
+    )
+
+
 def build_memory_context(user_id: str, current_msg: str, n: int = 3) -> str:
     """Build a context string for the system prompt from relevant memories."""
     memories = search_memory(user_id, current_msg, n=n)

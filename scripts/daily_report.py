@@ -174,6 +174,22 @@ def _collect_data(report_type: str = "evening") -> dict:
 
 _WEEKDAY_ZH = ["一", "二", "三", "四", "五", "六", "日"]
 
+
+def _build_care_note() -> str:
+    """Build a care note from recent memories for personalisation."""
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        open_id = cfg.get("feishu_open_id", "")
+        if not open_id:
+            return ""
+        from sjtu_agent.memory import get_care_suggestions
+        suggestion = get_care_suggestions(open_id)
+        if suggestion:
+            return f"\n用户近期的关注和动态：{suggestion}\n在行动建议中适当提及这些内容，让用户感到被关注。"
+    except Exception:
+        pass
+    return ""
+
 def build_report(report_type: str = "evening") -> str:
     """收集数据 → 调用 AI 生成中文汇报 → 返回 HTML 格式字符串。"""
     now = dt.datetime.now(dc.CST)
@@ -326,7 +342,8 @@ def build_report(report_type: str = "evening") -> str:
 💡 <b>行动建议</b>：根据当前 DDL 紧急程度和时段，用1-2句话给出具体建议
 
 以下是收集到的数据：
-{data_ctx}"""
+{data_ctx}
+{_build_care_note()}"""
 
     print("[daily_report] 正在生成汇报…")
     try:
