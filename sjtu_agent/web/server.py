@@ -789,8 +789,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send_file(STATIC_DIR / "index.html")
         elif path == "/api/config":
+            if not _check_auth(self): self._send_json({"error":"unauthorized"}, 403); return
             self._send_json(_get_config_values())
         elif path == "/api/status":
+            if not _check_auth(self): self._send_json({"error":"unauthorized"}, 403); return
             self._send_json(_get_status())
         elif path == "/api/wechat/qr_status":
             from urllib.parse import parse_qs
