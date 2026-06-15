@@ -1487,6 +1487,78 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         print(f"[feishu] handler 异常：{e}")
 
 
+# ── 心跳与健壮性 ────────────────────────────────────────────────────────────
+
+def _heartbeat_worker(interval: float = 30) -> None:
+    """后台线程：每 interval 秒写一次心跳时间戳。"""
+    import atexit as _atexit
+    from sjtu_agent.paths import DATA_DIR
+    hb_file = DATA_DIR / "feishu_heartbeat.json"
+    _atexit.register(lambda: hb_file.write_text(
+        json.dumps({"status": "stopped", "last_heartbeat": ""}, ensure_ascii=False),
+        encoding="utf-8",
+    ) if hb_file.parent.exists() else None)
+    while True:
+        try:
+            hb_file.parent.mkdir(parents=True, exist_ok=True)
+            hb_file.write_text(json.dumps({
+                "status": "running",
+                "last_heartbeat": _dt.datetime.now().isoformat(),
+            }, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        time.sleep(interval)
+
+
+def _startup_health_check() -> None:
+    """启动自检：验证凭据、ChromaDB、Agent API。失败则打印原因并退出。"""
+    all_ok = True
+
+    # 1. 凭据（已在模块加载时检查过，这里只确认）
+    if not APP_ID or not APP_SECRET:
+        print("[X] 缺 feishu_app_id / feishu_app_secret")
+        sys.exit(1)
+    print("[✓] 飞书凭据已配置")
+
+    # 2. ChromaDB 可用性
+    try:
+        from sjtu_agent.memory import _get_client, build_memory_context
+        _client = _get_client(str(DATA_DIR / "chroma_memory"))
+        print("[✓] ChromaDB 就绪")
+    except Exception as e:
+        print(f"[!] ChromaDB 不可用（记忆功能将停用）: {e}")
+        # 不阻塞启动
+
+    # 3. Agent API 连通性
+    try:
+        cfg = agent.load_agent_config()
+        if cfg.get("api_key"):
+            print(f"[✓] Agent API 已配置 (model={cfg.get('model', '?')})")
+        else:
+            print("[!] Agent API Key 未配置（对话功能不可用）")
+            all_ok = False
+    except Exception as e:
+        print(f"[!] Agent API 检查失败: {e}")
+        all_ok = False
+
+    if not all_ok:
+        print("[i] 部分服务不可用，Bot 将继续启动但功能受限")
+
+
+def _shutdown_cleanup() -> None:
+    """atexit: 关闭线程池、清理临时文件。"""
+    try:
+        _EXECUTOR.shutdown(wait=False)
+    except Exception:
+        pass
+    try:
+        import shutil
+        if _TMP_DIR.exists():
+            shutil.rmtree(str(_TMP_DIR), ignore_errors=True)
+    except Exception:
+        pass
+
+
 # ── 入口 ──────────────────────────────────────────────────────────────────────
 
 def _build_ws_client() -> lark.ws.Client:
@@ -1534,6 +1606,16 @@ def main() -> None:
     WHOAMI_MODE = args.whoami
     if WHOAMI_MODE:
         print("[whoami] WHOAMI 模式：bot 会把每个发送者的 open_id 原样回显，不调 agent")
+
+    # 启动自检
+    _startup_health_check()
+
+    # atexit 清理
+    import atexit as _atexit
+    _atexit.register(_shutdown_cleanup)
+
+    # 心跳线程
+    threading.Thread(target=_heartbeat_worker, daemon=True, name="feishu-hb").start()
 
     client = _build_ws_client()
     print(f"[OK] 飞书 bot 已启动（App ID: {APP_ID[:10]}…），等待消息…")

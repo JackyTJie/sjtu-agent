@@ -111,6 +111,24 @@ class ServiceRow(tk.Frame):
 
     def refresh(self):
         running = session_running(self.session)
+        if running:
+            # 额外检查心跳：进程可能在跑但已僵死
+            try:
+                import json, datetime, os, sys, platformdirs
+                from pathlib import Path as _Path
+                data_dir = _Path(os.environ.get("SJTU_AGENT_HOME",
+                    platformdirs.user_data_dir("sjtu-agent", "sjtu")))
+                hb_file = data_dir / "feishu_heartbeat.json"
+                if hb_file.exists():
+                    data = json.loads(hb_file.read_text(encoding="utf-8"))
+                    last = data.get("last_heartbeat", "")
+                    if last:
+                        last_dt = datetime.datetime.fromisoformat(last)
+                        since = (datetime.datetime.now() - last_dt).total_seconds()
+                        if since > 90:
+                            running = False  # 心跳超时，标记为无响应
+            except Exception:
+                pass
         self.status_label.config(
             text="● 运行中" if running else "○ 未运行",
             fg=self.green if running else self.fg,
