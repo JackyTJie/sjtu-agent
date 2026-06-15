@@ -1684,121 +1684,84 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def tool_setup_course_community(username: str = "", password: str = "") -> dict:
-    """Login to course.sjtu.plus via jAccount SSO using Playwright."""
+    """Login to course.sjtu.plus. POST /api/auth/login with email+password,
+    capture session cookie, verify via /api/auth/me, save to config."""
     import json as _json
-    import time as _time
+    import os as _os
     import requests as _rq
     from sjtu_agent.paths import CONFIG_PATH as _CFG
 
-    cfg = {}
-    if _CFG.exists():
-        try:
-            cfg = _json.loads(_CFG.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    jaccount_cookies = cfg.get("jaccount_cookies", {})
-    if not jaccount_cookies:
+    email = (username or "").strip()
+    pwd = (password or "").strip()
+    if not email:
+        email = _os.environ.get("JACCOUNT_USERNAME", "").strip()
+    if not pwd:
+        pwd = _os.environ.get("JACCOUNT_PASSWORD", "").strip()
+    if not email or not pwd:
         return {
-            "error": "未配置 jAccount 凭据。请先运行 sjtu-agent setup 或在对话中说「配置 jAccount」。"
+            "error": "未找到 jAccount 凭据（JACCOUNT_USERNAME/JACCOUNT_PASSWORD）",
+            "next_action": "请先配置 jAccount 后再试。"
         }
+    if "@" not in email:
+        email = email + "@sjtu.edu.cn"
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return {"error": "Playwright 未安装，请运行 playwright install chromium"}
-
-    course_cookies = {}
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            ctx = browser.new_context()
-            ctx.add_cookies([
-                {"name": k, "value": v, "domain": "jaccount.sjtu.edu.cn", "path": "/"}
-                for k, v in jaccount_cookies.items()
-            ])
-            page = ctx.new_page()
-
-            # Step 1: Visit the site
-            page.goto("https://course.sjtu.plus/", wait_until="domcontentloaded", timeout=30_000)
-            _time.sleep(2)
-
-            # Step 2: Find and click the login button (try multiple selectors)
-            selectors = [
-                "text=使用 jAccount 登录",
-                "text=jAccount 登录",
-                "text=jAccount",
-                "button:has-text('登录')",
-                "a:has-text('登录')",
-            ]
-            clicked = False
-            for sel in selectors:
-                btn = page.locator(sel)
-                if btn.count() > 0:
-                    btn.first.click()
-                    clicked = True
-                    break
-
-            if clicked:
-                _time.sleep(5)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=20_000)
-                except Exception:
-                    pass
-            else:
-                # Maybe already logged in (jAccount cookies were enough)
-                _time.sleep(2)
-
-            # Step 3: Verify by checking /api/auth/me
-            page.goto("https://course.sjtu.plus/api/auth/me", wait_until="domcontentloaded", timeout=15_000)
-            _time.sleep(2)
-            body = page.content()
-            already_authed = "username" in body and "error" not in body.lower()
-
-            # Step 4: Collect cookies
-            for c in ctx.cookies():
-                domain = c.get("domain", "")
-                if "course.sjtu.plus" in domain:
-                    course_cookies[c["name"]] = c["value"]
-
-            browser.close()
-    except Exception as e:
-        return {
-            "error": f"选课社区登录（Playwright）失败: {e}",
-            "next_action": "请手动访问 https://course.sjtu.plus 登录后再试。",
-        }
-
-    if not course_cookies or not already_authed:
-        return {
-            "error": "未能获取有效的选课社区 session",
-            "next_action": (
-                "请手动打开浏览器访问 https://course.sjtu.plus ，"
-                "点击「使用 jAccount 登录」完成登录，然后回来告诉我「已登录」。"
-            ),
-        }
-
-    # Verify cookies work via direct API call
-    headers = {
-        "User-Agent": "Mozilla/5.0",
+    sess = _rq.Session()
+    sess.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
-        "Referer": "https://course.sjtu.plus/",
-    }
+        "Referer": "https://course.sjtu.plus/login",
+        "Origin": "https://course.sjtu.plus",
+    })
+
+    # Step 1: Get CSRF token from /api/system-settings
+    csrf_token = ""
     try:
-        r = _rq.get("https://course.sjtu.plus/api/auth/me", headers=headers,
-                    cookies=course_cookies, timeout=10)
-        if r.status_code != 200 or "error" in str(r.json().get("", "")):
-            return {
-                "error": "cookie 验证失败，请手动登录选课社区",
-                "next_action": "请访问 https://course.sjtu.plus 登录后告诉我「已登录」。"
-            }
+        r0 = sess.get("https://course.sjtu.plus/api/system-settings", timeout=15)
+        csrf_token = r0.headers.get("X-Csrf-Token", "")
     except Exception:
         pass
 
-    cfg["course_sjtu_cookies"] = course_cookies
+    if csrf_token:
+        sess.headers["X-CSRFToken"] = csrf_token
+
+    # Step 2: Login
+    try:
+        r = sess.post("https://course.sjtu.plus/api/auth/login",
+                      json={"email": email, "password": pwd}, timeout=15)
+    except Exception as e:
+        return {"error": f"登录请求失败: {e}"}
+
+    if r.status_code != 200:
+        return {
+            "error": f"登录失败（HTTP {r.status_code}），请确认邮箱和密码是否正确",
+            "debug": r.text[:200],
+        }
+
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if "error" in str(data).lower() or not data.get("id"):
+        return {
+            "error": f"登录失败: {data.get('error', data.get('message', r.text[:200]))}",
+            "next_action": "请确认邮箱格式为 jAccount@sjtu.edu.cn，密码为你在 course.sjtu.plus 注册时设置的密码。"
+        }
+
+    # Verify session works
+    try:
+        me = sess.get("https://course.sjtu.plus/api/auth/me", timeout=10)
+        if me.status_code != 200 or not me.json().get("username"):
+            return {"error": "登录后验证失败，session 未生效"}
+    except Exception:
+        return {"error": "登录后验证失败，网络异常"}
+
+    # Save cookies
+    cfg = {}
+    if _CFG.exists():
+        try: cfg = _json.loads(_CFG.read_text(encoding="utf-8"))
+        except Exception: pass
+    cfg["course_sjtu_cookies"] = dict(sess.cookies)
     _CFG.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "ok": True,
-        "message": f"选课社区登录成功（已验证 session 有效）",
+        "message": f"选课社区登录成功（用户: {data.get('username', email)}）",
     }
 
 
@@ -1806,7 +1769,7 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
-    """Call course.sjtu.plus API (v2). Uses stored cookies; auto-refreshes on 401."""
+    """Call course.sjtu.plus API (v2). Uses stored cookies."""
     import json as _json
     import time as _time
     import requests as _rq
@@ -1849,17 +1812,16 @@ def _course_plus_request(path: str, params: dict | None = None, max_retry: int =
 
 
 def tool_search_courses(query: str, page_size: int = 8) -> dict:
-    """Search courses on course.sjtu.plus. Auto-retries with login on 401."""
+    """Search courses on course.sjtu.plus."""
     if not query.strip():
         return {"error": "请提供搜索关键词"}
     data, err = _course_plus_request("/api/course", {
         "search": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
     })
     if err:
-        if "需要登录" in err or "401" in err:
-            # Try auto-login via jAccount SSO, then retry once
-            login_result = tool_setup_course_community()
-            if login_result.get("ok"):
+        if "需要登录" in err:
+            login = tool_setup_course_community()
+            if login.get("ok"):
                 data, err = _course_plus_request("/api/course", {
                     "search": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
                 }, max_retry=1)
