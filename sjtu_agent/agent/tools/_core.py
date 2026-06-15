@@ -1684,10 +1684,11 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def tool_setup_course_community(username: str = "", password: str = "") -> dict:
-    """Login to course.sjtu.plus. POST /api/auth/login with email+password,
-    capture session cookie, verify via /api/auth/me, save to config."""
+    """Login to course.sjtu.plus using Playwright browser automation.
+    Fills in the login form (email + password), submits, and captures cookies."""
     import json as _json
     import os as _os
+    import time as _time
     import requests as _rq
     from sjtu_agent.paths import CONFIG_PATH as _CFG
 
@@ -1705,63 +1706,84 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
     if "@" not in email:
         email = email + "@sjtu.edu.cn"
 
-    sess = _rq.Session()
-    sess.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Referer": "https://course.sjtu.plus/login",
-        "Origin": "https://course.sjtu.plus",
-    })
-
-    # Step 1: Get CSRF token from /api/auth/csrf (Django standard endpoint)
-    csrf_token = ""
     try:
-        r0 = sess.get("https://course.sjtu.plus/api/auth/csrf", timeout=15)
-        csrf_token = r0.headers.get("X-Csrf-Token", "")
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"error": "Playwright 未安装，请运行 playwright install chromium"}
+
+    course_cookies = {}
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context()
+            page = ctx.new_page()
+
+            # Navigate to login page
+            page.goto("https://course.sjtu.plus/login", wait_until="networkidle", timeout=30_000)
+            _time.sleep(1)
+
+            # Fill in login form
+            email_input = page.locator("input[type=email], input[name=email], input[placeholder*=邮箱]")
+            pwd_input = page.locator("input[type=password], input[name=password]")
+            if email_input.count() > 0 and pwd_input.count() > 0:
+                email_input.first.fill(email)
+                pwd_input.first.fill(pwd)
+                # Click submit button
+                submit = page.locator("button[type=submit], button:has-text('登录'), button:has-text('登 录')")
+                if submit.count() > 0:
+                    submit.first.click()
+                    _time.sleep(5)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=20_000)
+                    except Exception:
+                        pass
+
+            # Check if login succeeded by hitting /api/auth/me
+            page.goto("https://course.sjtu.plus/api/auth/me", wait_until="domcontentloaded", timeout=15_000)
+            _time.sleep(2)
+
+            # Collect cookies
+            for c in ctx.cookies():
+                domain = c.get("domain", "")
+                if "course.sjtu.plus" in domain:
+                    course_cookies[c["name"]] = c["value"]
+
+            browser.close()
+    except Exception as e:
+        return {
+            "error": f"选课社区登录（Playwright）失败: {e}",
+            "next_action": "请手动访问 https://course.sjtu.plus 登录后再试。"
+        }
+
+    if not course_cookies:
+        return {
+            "error": "未能获取选课社区 session cookie",
+            "next_action": "请手动打开浏览器访问 https://course.sjtu.plus 登录后，回来告诉我「已登录」。"
+        }
+
+    # Verify via direct API call
+    try:
+        r = _rq.get("https://course.sjtu.plus/api/auth/me",
+                    cookies=course_cookies,
+                    headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+                    timeout=10)
+        if r.status_code != 200 or not r.json().get("username"):
+            return {
+                "error": "cookie 验证失败，请手动登录选课社区",
+                "next_action": "访问 https://course.sjtu.plus 登录后告诉我「已登录」。"
+            }
     except Exception:
         pass
 
-    if csrf_token:
-        sess.headers["X-CSRFToken"] = csrf_token
-
-    # Step 2: Login
-    try:
-        r = sess.post("https://course.sjtu.plus/api/auth/login",
-                      json={"email": email, "password": pwd}, timeout=15)
-    except Exception as e:
-        return {"error": f"登录请求失败: {e}"}
-
-    if r.status_code != 200:
-        return {
-            "error": f"登录失败（HTTP {r.status_code}），请确认邮箱和密码是否正确",
-            "debug": r.text[:200],
-        }
-
-    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    if "error" in str(data).lower() or not data.get("id"):
-        return {
-            "error": f"登录失败: {data.get('error', data.get('message', r.text[:200]))}",
-            "next_action": "请确认邮箱格式为 jAccount@sjtu.edu.cn，密码为你在 course.sjtu.plus 注册时设置的密码。"
-        }
-
-    # Verify session works
-    try:
-        me = sess.get("https://course.sjtu.plus/api/auth/me", timeout=10)
-        if me.status_code != 200 or not me.json().get("username"):
-            return {"error": "登录后验证失败，session 未生效"}
-    except Exception:
-        return {"error": "登录后验证失败，网络异常"}
-
-    # Save cookies
     cfg = {}
     if _CFG.exists():
         try: cfg = _json.loads(_CFG.read_text(encoding="utf-8"))
         except Exception: pass
-    cfg["course_sjtu_cookies"] = dict(sess.cookies)
+    cfg["course_sjtu_cookies"] = course_cookies
     _CFG.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "ok": True,
-        "message": f"选课社区登录成功（用户: {data.get('username', email)}）",
+        "message": f"选课社区登录成功（已验证 /api/auth/me）",
     }
 
 
