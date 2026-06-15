@@ -1684,11 +1684,10 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def tool_setup_course_community(username: str = "", password: str = "") -> dict:
-    """Login to course.sjtu.plus via jAccount SSO using Playwright.
-    Injects stored jAccount cookies, visits the site, clicks login,
-    and saves the resulting session cookies to config.json."""
+    """Login to course.sjtu.plus via jAccount SSO using Playwright."""
     import json as _json
     import time as _time
+    import requests as _rq
     from sjtu_agent.paths import CONFIG_PATH as _CFG
 
     cfg = {}
@@ -1701,11 +1700,7 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
     jaccount_cookies = cfg.get("jaccount_cookies", {})
     if not jaccount_cookies:
         return {
-            "error": "未配置 jAccount 凭据",
-            "next_action": (
-                "请先配置 jAccount（运行 sjtu-agent setup 或在对话中说「配置 jAccount」），"
-                "然后再执行选课社区登录。"
-            ),
+            "error": "未配置 jAccount 凭据。请先运行 sjtu-agent setup 或在对话中说「配置 jAccount」。"
         }
 
     try:
@@ -1713,6 +1708,7 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
     except ImportError:
         return {"error": "Playwright 未安装，请运行 playwright install chromium"}
 
+    course_cookies = {}
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
@@ -1722,58 +1718,87 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
                 for k, v in jaccount_cookies.items()
             ])
             page = ctx.new_page()
-            page.goto("https://course.sjtu.plus/", wait_until="networkidle", timeout=30_000)
-            _time.sleep(1)
 
-            # Click jAccount SSO login button
-            btn = page.locator("text=使用 jAccount 登录")
-            if btn.count() == 0:
-                btn = page.locator("text=jAccount")
-            if btn.count() == 0:
-                btn = page.locator("text=登录")
-            if btn.count() > 0:
-                btn.first.click()
-                _time.sleep(3)
-                page.wait_for_load_state("networkidle", timeout=15_000)
+            # Step 1: Visit the site
+            page.goto("https://course.sjtu.plus/", wait_until="domcontentloaded", timeout=30_000)
+            _time.sleep(2)
 
-            # Collect all cookies from the course.sjtu.plus domain
-            course_cookies = {}
+            # Step 2: Find and click the login button (try multiple selectors)
+            selectors = [
+                "text=使用 jAccount 登录",
+                "text=jAccount 登录",
+                "text=jAccount",
+                "button:has-text('登录')",
+                "a:has-text('登录')",
+            ]
+            clicked = False
+            for sel in selectors:
+                btn = page.locator(sel)
+                if btn.count() > 0:
+                    btn.first.click()
+                    clicked = True
+                    break
+
+            if clicked:
+                _time.sleep(5)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=20_000)
+                except Exception:
+                    pass
+            else:
+                # Maybe already logged in (jAccount cookies were enough)
+                _time.sleep(2)
+
+            # Step 3: Verify by checking /api/auth/me
+            page.goto("https://course.sjtu.plus/api/auth/me", wait_until="domcontentloaded", timeout=15_000)
+            _time.sleep(2)
+            body = page.content()
+            already_authed = "username" in body and "error" not in body.lower()
+
+            # Step 4: Collect cookies
             for c in ctx.cookies():
                 domain = c.get("domain", "")
                 if "course.sjtu.plus" in domain:
                     course_cookies[c["name"]] = c["value"]
 
-            if not course_cookies:
-                # Try a second approach: go directly to the API to trigger auth
-                page.goto("https://course.sjtu.plus/api/auth/me", wait_until="networkidle", timeout=15_000)
-                _time.sleep(2)
-                for c in ctx.cookies():
-                    domain = c.get("domain", "")
-                    if "course.sjtu.plus" in domain:
-                        course_cookies[c["name"]] = c["value"]
-
             browser.close()
     except Exception as e:
         return {
-            "error": f"选课社区登录失败（Playwright 自动化）: {e}",
+            "error": f"选课社区登录（Playwright）失败: {e}",
             "next_action": "请手动访问 https://course.sjtu.plus 登录后再试。",
         }
 
-    if not course_cookies:
+    if not course_cookies or not already_authed:
         return {
-            "error": "未能从浏览器获取选课社区 cookie",
+            "error": "未能获取有效的选课社区 session",
             "next_action": (
-                "请手动访问 https://course.sjtu.plus 并用 jAccount 登录一次，"
-                "然后告诉我「已登录」，我就能正常使用了。"
+                "请手动打开浏览器访问 https://course.sjtu.plus ，"
+                "点击「使用 jAccount 登录」完成登录，然后回来告诉我「已登录」。"
             ),
         }
 
-    # Save cookies to config
+    # Verify cookies work via direct API call
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Referer": "https://course.sjtu.plus/",
+    }
+    try:
+        r = _rq.get("https://course.sjtu.plus/api/auth/me", headers=headers,
+                    cookies=course_cookies, timeout=10)
+        if r.status_code != 200 or "error" in str(r.json().get("", "")):
+            return {
+                "error": "cookie 验证失败，请手动登录选课社区",
+                "next_action": "请访问 https://course.sjtu.plus 登录后告诉我「已登录」。"
+            }
+    except Exception:
+        pass
+
     cfg["course_sjtu_cookies"] = course_cookies
     _CFG.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "ok": True,
-        "message": f"选课社区登录成功，已保存 {len(course_cookies)} 个 cookie",
+        "message": f"选课社区登录成功（已验证 session 有效）",
     }
 
 
@@ -1781,8 +1806,7 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
-    """Call course.sjtu.plus API (v2, 2026-06). Uses stored cookies.
-    Returns (data_or_None, error_str_or_None)."""
+    """Call course.sjtu.plus API (v2). Uses stored cookies; auto-refreshes on 401."""
     import json as _json
     import time as _time
     import requests as _rq
@@ -1825,43 +1849,40 @@ def _course_plus_request(path: str, params: dict | None = None, max_retry: int =
 
 
 def tool_search_courses(query: str, page_size: int = 8) -> dict:
-    """Search courses on course.sjtu.plus."""
+    """Search courses on course.sjtu.plus. Auto-retries with login on 401."""
     if not query.strip():
         return {"error": "请提供搜索关键词"}
     data, err = _course_plus_request("/api/course", {
-        "search": query.strip(),
-        "page_size": min(max(1, page_size), 20),
-        "page": 1,
+        "search": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
     })
     if err:
-        return {"error": err}
+        if "需要登录" in err or "401" in err:
+            # Try auto-login via jAccount SSO, then retry once
+            login_result = tool_setup_course_community()
+            if login_result.get("ok"):
+                data, err = _course_plus_request("/api/course", {
+                    "search": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
+                }, max_retry=1)
+        if err:
+            return {"error": err}
+
     if not data or not isinstance(data, dict):
         return {"error": "选课社区返回了意外的数据格式"}
-
     items = data.get("items", [])
     if not items:
         return {"message": f"选课社区没有找到与「{query}」相关的课程"}
-
     results = []
     for item in items[:page_size]:
         teacher = (item.get("main_teacher") or {})
         rating = item.get("rating") or {}
         results.append({
-            "id":          item.get("id"),
-            "code":        item.get("code", ""),
-            "name":        item.get("name", ""),
-            "credit":      item.get("credit", 0),
-            "department":  item.get("department", ""),
-            "teacher":     teacher.get("name", ""),
-            "avg_rating":  rating.get("avg", 0),
+            "id": item.get("id"), "code": item.get("code", ""), "name": item.get("name", ""),
+            "credit": item.get("credit", 0), "department": item.get("department", ""),
+            "teacher": teacher.get("name", ""), "avg_rating": rating.get("avg", 0),
             "review_count": rating.get("count", 0),
-            "url":         f"{_COURSE_PLUS_BASE}/course/{item.get('id')}",
+            "url": f"{_COURSE_PLUS_BASE}/course/{item.get('id')}",
         })
-    return {
-        "total": data.get("total", len(items)),
-        "returned": len(results),
-        "courses": results,
-    }
+    return {"total": data.get("total"), "returned": len(results), "courses": results}
 
 
 def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
@@ -1871,39 +1892,27 @@ def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
         return {"error": err}
     if not detail or not isinstance(detail, dict):
         return {"error": "选课社区返回了意外的数据格式"}
-
     teacher = (detail.get("main_teacher") or {})
     rating = detail.get("rating") or {}
     result = {
-        "id":          detail.get("id"),
-        "code":        detail.get("code", ""),
-        "name":        detail.get("name", ""),
-        "credit":      detail.get("credit", 0),
-        "department":  detail.get("department", ""),
-        "teacher":     teacher.get("name", ""),
-        "teacher_title": teacher.get("title", ""),
-        "avg_rating":  rating.get("avg", 0),
-        "review_count": rating.get("count", 0),
-        "url":         f"{_COURSE_PLUS_BASE}/course/{course_id}",
+        "id": detail.get("id"), "code": detail.get("code", ""), "name": detail.get("name", ""),
+        "credit": detail.get("credit", 0), "department": detail.get("department", ""),
+        "teacher": teacher.get("name", ""), "teacher_title": teacher.get("title", ""),
+        "avg_rating": rating.get("avg", 0), "review_count": rating.get("count", 0),
+        "url": f"{_COURSE_PLUS_BASE}/course/{course_id}",
     }
-
     review_data, _ = _course_plus_request(f"/api/course/{course_id}/review", {
-        "order_by": "updated_at",
-        "page_size": min(max(1, max_reviews), 20),
-        "page": 1,
+        "order_by": "updated_at", "page_size": min(max(1, max_reviews), 20), "page": 1,
     })
     if review_data and isinstance(review_data, dict):
         reviews = []
         for r in (review_data.get("items") or [])[:max_reviews]:
             reviews.append({
-                "rating":     r.get("rating", 0),
-                "content":    (r.get("content") or "")[:500],
-                "semester":   r.get("semester", ""),
-                "created_at": r.get("created_at", ""),
+                "rating": r.get("rating", 0), "content": (r.get("content") or "")[:500],
+                "semester": r.get("semester", ""), "created_at": r.get("created_at", ""),
             })
         result["reviews"] = reviews
         result["review_total"] = review_data.get("total", len(reviews))
-
     return result
 
 
