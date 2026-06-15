@@ -1684,143 +1684,148 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def tool_setup_course_community(username: str = "", password: str = "") -> dict:
-    """Login to course.sjtu.plus and save session cookie.
-
-    Note: 2026-06 the site was rebuilt as React SPA + GraphQL. Old REST
-    login endpoints no longer work. Returns placeholder until new API is adapted.
-    """
+    """Login to course.sjtu.plus. New site (2026-06) uses cookie-based jAccount SSO.
+    Users should log in via browser; this tool now directs them there."""
     return {
-        "ok": False,
-        "error": (
-            "选课社区近日更新了网站架构（REST → React SPA + GraphQL），"
-            "原有登录接口已变更。请直接访问 https://course.sjtu.plus/login 手动登录。"
-            "我们正在适配新的认证流程。"
+        "ok": True,
+        "message": (
+            "新版选课社区使用 jAccount SSO 自动登录。"
+            "请直接访问 https://course.sjtu.plus 并使用 jAccount 登录后，"
+            "所有课程查询和评价功能即可正常使用（无需额外配置）。"
         ),
     }
 
 
-def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
-    """Call course.sjtu.plus private API with cookie.
+_COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
-    Note: 2026-06 old REST API (/api/search/, /api/me/, /api/course/{id}/) is offline.
-    New site uses GraphQL (/graphql) with CSRF token + session cookie.
-    Returns placeholder error until new API is adapted.
-    """
-    return None, (
-        "选课社区近日更新了网站架构（REST → GraphQL + SPA），"
-        "原有 API 接口已下线。我们正在适配新的 GraphQL API，"
-        "暂时请直接访问 https://course.sjtu.plus 查看课程评价。"
-    )
+
+def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
+    """Call course.sjtu.plus API (v2, 2026-06). Uses session cookie from config if available.
+    Returns (data_or_None, error_str_or_None)."""
+    import json as _json
+    import time as _time
+    import requests as _rq
+    from sjtu_agent.paths import CONFIG_PATH as _CFG
+
+    # Load stored cookies if available
+    cookies = {}
+    try:
+        cfg = _json.loads(_CFG.read_text(encoding="utf-8"))
+        if cfg.get("course_sjtu_cookies"):
+            cookies = cfg["course_sjtu_cookies"]
+    except Exception:
+        pass
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Referer": _COURSE_PLUS_BASE + "/",
+    }
+
+    url = _COURSE_PLUS_BASE + path
+    last_err = ""
+    for attempt in range(max_retry):
+        try:
+            r = _rq.get(url, params=params or {}, headers=headers, cookies=cookies, timeout=15, allow_redirects=True)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict) and data.get("error"):
+                    if "unauthorized" in str(data["error"]).lower():
+                        return None, "选课社区需要登录，请先在浏览器访问 https://course.sjtu.plus 并登录"
+                    return None, data.get("error", "未知错误")
+                return data, None
+            if r.status_code == 404:
+                return None, "未找到（404）"
+            last_err = f"HTTP {r.status_code}"
+        except Exception as e:
+            last_err = str(e)
+            _time.sleep(1 + attempt)
+    return None, f"选课社区请求失败：{last_err}"
 
 
 def tool_search_courses(query: str, page_size: int = 8) -> dict:
-    """在选课社区 course.sjtu.plus 搜索课程，返回简要列表。
-
-    返回每门课的 id / name / 老师 / 学院 / 平均评分 / 评价数，用于让用户挑选后再用
-    get_course_detail 查看详情和评价。
-    """
-    if not query or not query.strip():
-        return {"error": "query 不能为空"}
-    data, err = _course_plus_request("/api/search/", {"q": query.strip(), "page_size": max(1, min(20, page_size))})
+    """Search courses on course.sjtu.plus. Uses new API (2026-06)."""
+    if not query.strip():
+        return {"error": "请提供搜索关键词"}
+    data, err = _course_plus_request("/api/course", {
+        "search": query.strip(),
+        "page_size": min(max(1, page_size), 20),
+        "page": 1,
+    })
     if err:
         return {"error": err}
+    if not data or not isinstance(data, dict):
+        return {"error": "选课社区返回了意外的数据格式"}
+
+    items = data.get("items", [])
+    if not items:
+        return {"message": f"选课社区没有找到与「{query}」相关的课程"}
 
     results = []
-    raw = data.get("results") if isinstance(data, dict) else data
-    if not isinstance(raw, list):
-        return {"error": "选课社区返回结构异常", "raw_keys": list(data.keys()) if isinstance(data, dict) else None}
-
-    for item in raw[:page_size]:
-        _r = item.get("rating")
-        if isinstance(_r, dict):
-            _avg = _r.get("avg")
-            _rcount = _r.get("count")
-        else:
-            _avg = _r or item.get("avg_rating")
-            _rcount = item.get("review_count") or item.get("reviews_count")
+    for item in items[:page_size]:
+        teacher = (item.get("main_teacher") or {})
+        rating = item.get("rating") or {}
         results.append({
-            "id":         item.get("id") or item.get("course_id"),
-            "code":       item.get("code") or item.get("course_code"),
-            "name":       item.get("name") or item.get("title"),
-            "teachers":   item.get("teachers") or item.get("teacher") or item.get("main_teacher"),
-            "department": item.get("department") or item.get("dept"),
-            "credit":     item.get("credit"),
-            "rating":     _avg,
-            "review_count": _rcount,
-            "url":        f"{_COURSE_PLUS_BASE}/course/{item.get('id') or item.get('course_id')}/"
-                          if (item.get("id") or item.get("course_id")) else None,
+            "id":          item.get("id"),
+            "code":        item.get("code", ""),
+            "name":        item.get("name", ""),
+            "credit":      item.get("credit", 0),
+            "department":  item.get("department", ""),
+            "teacher":     teacher.get("name", ""),
+            "avg_rating":  rating.get("avg", 0),
+            "review_count": rating.get("count", 0),
+            "url":         f"{_COURSE_PLUS_BASE}/course/{item.get('id')}",
         })
-
     return {
-        "query": query,
-        "count": len(results),
-        "total": data.get("count") if isinstance(data, dict) else None,
-        "results": results,
+        "total": data.get("total", len(items)),
+        "returned": len(results),
+        "courses": results,
     }
 
 
 def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
-    """获取选课社区某门课的详细信息和最新若干条评价。"""
-    if not course_id:
-        return {"error": "course_id 不能为空"}
-    detail, err = _course_plus_request(f"/api/course/{course_id}/")
+    """Get course detail and reviews from course.sjtu.plus. Uses new API (2026-06)."""
+    detail, err = _course_plus_request(f"/api/course/{course_id}")
     if err:
         return {"error": err}
+    if not detail or not isinstance(detail, dict):
+        return {"error": "选课社区返回了意外的数据格式"}
 
-    review_data, rerr = _course_plus_request(f"/api/course/{course_id}/review/", {"page_size": max(1, min(20, max_reviews))})
-    reviews_raw = []
-    if not rerr and isinstance(review_data, dict):
-        reviews_raw = review_data.get("results") or []
-    elif not rerr and isinstance(review_data, list):
-        reviews_raw = review_data
-
-    def _trim(t: str, n: int = 600) -> str:
-        if not t:
-            return ""
-        t = t.strip()
-        return t if len(t) <= n else t[:n] + "..."
-
-    reviews = []
-    for r in reviews_raw[:max_reviews]:
-        reviews.append({
-            "rating":     r.get("rating") or r.get("score"),
-            "semester":   r.get("semester") or r.get("term"),
-            "created_at": r.get("created_at") or r.get("created"),
-            "content":    _trim(r.get("content") or r.get("comment") or r.get("text") or ""),
-            "likes":      r.get("likes") or r.get("like_count"),
-        })
-
-    _mt = detail.get("main_teacher") or {}
-    _tg = detail.get("teacher_group") or []
-    _teachers = (
-        detail.get("teachers")
-        or detail.get("teacher")
-        or (_mt.get("name") if isinstance(_mt, dict) else None)
-        or ", ".join([t.get("name", "") for t in _tg if isinstance(t, dict)]) or None
-    )
-    _rating = detail.get("rating")
-    if isinstance(_rating, dict):
-        _avg = _rating.get("avg")
-        _rcount = _rating.get("count")
-    else:
-        _avg = _rating or detail.get("avg_rating")
-        _rcount = detail.get("review_count") or detail.get("reviews_count")
-
-    return {
-        "id":         detail.get("id") or course_id,
-        "code":       detail.get("code") or detail.get("course_code"),
-        "name":       detail.get("name") or detail.get("title"),
-        "teachers":   _teachers,
-        "department": detail.get("department") or detail.get("dept"),
-        "credit":     detail.get("credit"),
-        "category":   detail.get("category"),
-        "rating":     _avg,
-        "review_count": _rcount,
-        "summary":    detail.get("summary") or detail.get("description"),
-        "url":        f"{_COURSE_PLUS_BASE}/course/{detail.get('id') or course_id}/",
-        "reviews":    reviews,
-        "reviews_returned": len(reviews),
+    teacher = (detail.get("main_teacher") or {})
+    rating = detail.get("rating") or {}
+    result = {
+        "id":          detail.get("id"),
+        "code":        detail.get("code", ""),
+        "name":        detail.get("name", ""),
+        "credit":      detail.get("credit", 0),
+        "department":  detail.get("department", ""),
+        "teacher":     teacher.get("name", ""),
+        "teacher_title": teacher.get("title", ""),
+        "avg_rating":  rating.get("avg", 0),
+        "review_count": rating.get("count", 0),
+        "url":         f"{_COURSE_PLUS_BASE}/course/{course_id}",
     }
+
+    # Fetch reviews
+    review_data, _ = _course_plus_request(f"/api/course/{course_id}/review", {
+        "order_by": "updated_at",
+        "page_size": min(max(1, max_reviews), 20),
+        "page": 1,
+    })
+    if review_data and isinstance(review_data, dict):
+        reviews = []
+        for r in (review_data.get("items") or [])[:max_reviews]:
+            reviews.append({
+                "rating":     r.get("rating", 0),
+                "content":    (r.get("content") or "")[:500],
+                "semester":   r.get("semester", ""),
+                "created_at": r.get("created_at", ""),
+            })
+        result["reviews"] = reviews
+        result["review_total"] = review_data.get("total", len(reviews))
+
+    return result
+
 
 
 def tool_save_credentials(

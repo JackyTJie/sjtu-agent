@@ -1766,7 +1766,7 @@ def _search_shuiyuan(cfg: dict, query: str, max_results: int = 5) -> list[dict]:
     return results
 
 
-_DYWEB_API = "https://api.share.dyweb.sjtu.cn/api/v1"
+_DYWEB_API = "https://api-v2.share.dyweb.sjtu.cn/api/v1"
 _DYWEB_MATERIAL_TYPES = {1: "课件", 2: "答案", 3: "实验报告", 4: "参考书", 5: "试卷", 6: "其他"}
 
 
@@ -1821,10 +1821,37 @@ def _dyweb_refresh_token(cfg: dict) -> str:
 def _dyweb_request(cfg: dict, method: str, path: str, **kwargs) -> dict | None:
     """带 token 自动刷新的 API 请求，返回 JSON data 或 None。
 
-    注: 2026-06 传承·交大已从 api.share.dyweb.sjtu.cn 子域名迁移到主域名，
-        旧 REST API 返回 SPA HTML（非 JSON）。待适配新 API。
+    新版 API (2026-06): api-v2.share.dyweb.sjtu.cn/api/v1
     """
-    return None  # API 已迁移，暂不可用
+    token = cfg.get("dyweb_token", "")
+    if not token:
+        token = _dyweb_refresh_token(cfg)
+        if not token:
+            return None
+
+    def _call(tok: str):
+        cookies = {"sjtu_token": tok}
+        headers = {"User-Agent": "Mozilla/5.0",
+                   "Origin": "https://share.dyweb.sjtu.cn",
+                   "Referer": "https://share.dyweb.sjtu.cn/"}
+        if method == "GET":
+            return requests.get(f"{_DYWEB_API}{path}", cookies=cookies, headers=headers, timeout=10, **kwargs)
+        return requests.post(f"{_DYWEB_API}{path}", cookies=cookies, headers=headers, timeout=10, **kwargs)
+
+    r = _call(token)
+    if r.status_code == 401:
+        token = _dyweb_refresh_token(cfg)
+        if not token:
+            return None
+        r = _call(token)
+
+    if r.status_code != 200:
+        return None
+    data = r.json()
+    if isinstance(data, dict) and not data.get("success", True):
+        print(f"[dyweb] API error: {data.get('message', '')}")
+        return None
+    return data.get("data")
 
 
 def _search_dyweb(cfg: dict, query: str, max_results: int = 6,
