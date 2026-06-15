@@ -1684,15 +1684,96 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def tool_setup_course_community(username: str = "", password: str = "") -> dict:
-    """Login to course.sjtu.plus. New site (2026-06) uses cookie-based jAccount SSO.
-    Users should log in via browser; this tool now directs them there."""
+    """Login to course.sjtu.plus via jAccount SSO using Playwright.
+    Injects stored jAccount cookies, visits the site, clicks login,
+    and saves the resulting session cookies to config.json."""
+    import json as _json
+    import time as _time
+    from sjtu_agent.paths import CONFIG_PATH as _CFG
+
+    cfg = {}
+    if _CFG.exists():
+        try:
+            cfg = _json.loads(_CFG.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    jaccount_cookies = cfg.get("jaccount_cookies", {})
+    if not jaccount_cookies:
+        return {
+            "error": "未配置 jAccount 凭据",
+            "next_action": (
+                "请先配置 jAccount（运行 sjtu-agent setup 或在对话中说「配置 jAccount」），"
+                "然后再执行选课社区登录。"
+            ),
+        }
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"error": "Playwright 未安装，请运行 playwright install chromium"}
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context()
+            ctx.add_cookies([
+                {"name": k, "value": v, "domain": "jaccount.sjtu.edu.cn", "path": "/"}
+                for k, v in jaccount_cookies.items()
+            ])
+            page = ctx.new_page()
+            page.goto("https://course.sjtu.plus/", wait_until="networkidle", timeout=30_000)
+            _time.sleep(1)
+
+            # Click jAccount SSO login button
+            btn = page.locator("text=使用 jAccount 登录")
+            if btn.count() == 0:
+                btn = page.locator("text=jAccount")
+            if btn.count() == 0:
+                btn = page.locator("text=登录")
+            if btn.count() > 0:
+                btn.first.click()
+                _time.sleep(3)
+                page.wait_for_load_state("networkidle", timeout=15_000)
+
+            # Collect all cookies from the course.sjtu.plus domain
+            course_cookies = {}
+            for c in ctx.cookies():
+                domain = c.get("domain", "")
+                if "course.sjtu.plus" in domain:
+                    course_cookies[c["name"]] = c["value"]
+
+            if not course_cookies:
+                # Try a second approach: go directly to the API to trigger auth
+                page.goto("https://course.sjtu.plus/api/auth/me", wait_until="networkidle", timeout=15_000)
+                _time.sleep(2)
+                for c in ctx.cookies():
+                    domain = c.get("domain", "")
+                    if "course.sjtu.plus" in domain:
+                        course_cookies[c["name"]] = c["value"]
+
+            browser.close()
+    except Exception as e:
+        return {
+            "error": f"选课社区登录失败（Playwright 自动化）: {e}",
+            "next_action": "请手动访问 https://course.sjtu.plus 登录后再试。",
+        }
+
+    if not course_cookies:
+        return {
+            "error": "未能从浏览器获取选课社区 cookie",
+            "next_action": (
+                "请手动访问 https://course.sjtu.plus 并用 jAccount 登录一次，"
+                "然后告诉我「已登录」，我就能正常使用了。"
+            ),
+        }
+
+    # Save cookies to config
+    cfg["course_sjtu_cookies"] = course_cookies
+    _CFG.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "ok": True,
-        "message": (
-            "新版选课社区使用 jAccount SSO 自动登录。"
-            "请直接访问 https://course.sjtu.plus 并使用 jAccount 登录后，"
-            "所有课程查询和评价功能即可正常使用（无需额外配置）。"
-        ),
+        "message": f"选课社区登录成功，已保存 {len(course_cookies)} 个 cookie",
     }
 
 
@@ -1700,14 +1781,13 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
-    """Call course.sjtu.plus API (v2, 2026-06). Uses session cookie from config if available.
+    """Call course.sjtu.plus API (v2, 2026-06). Uses stored cookies.
     Returns (data_or_None, error_str_or_None)."""
     import json as _json
     import time as _time
     import requests as _rq
     from sjtu_agent.paths import CONFIG_PATH as _CFG
 
-    # Load stored cookies if available
     cookies = {}
     try:
         cfg = _json.loads(_CFG.read_text(encoding="utf-8"))
@@ -1726,12 +1806,13 @@ def _course_plus_request(path: str, params: dict | None = None, max_retry: int =
     last_err = ""
     for attempt in range(max_retry):
         try:
-            r = _rq.get(url, params=params or {}, headers=headers, cookies=cookies, timeout=15, allow_redirects=True)
+            r = _rq.get(url, params=params or {}, headers=headers, cookies=cookies,
+                        timeout=15, allow_redirects=True)
             if r.status_code == 200:
                 data = r.json()
                 if isinstance(data, dict) and data.get("error"):
                     if "unauthorized" in str(data["error"]).lower():
-                        return None, "选课社区需要登录，请先在浏览器访问 https://course.sjtu.plus 并登录"
+                        return None, "选课社区需要登录，请说「配置选课社区」重新登录"
                     return None, data.get("error", "未知错误")
                 return data, None
             if r.status_code == 404:
@@ -1744,7 +1825,7 @@ def _course_plus_request(path: str, params: dict | None = None, max_retry: int =
 
 
 def tool_search_courses(query: str, page_size: int = 8) -> dict:
-    """Search courses on course.sjtu.plus. Uses new API (2026-06)."""
+    """Search courses on course.sjtu.plus."""
     if not query.strip():
         return {"error": "请提供搜索关键词"}
     data, err = _course_plus_request("/api/course", {
@@ -1784,7 +1865,7 @@ def tool_search_courses(query: str, page_size: int = 8) -> dict:
 
 
 def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
-    """Get course detail and reviews from course.sjtu.plus. Uses new API (2026-06)."""
+    """Get course detail and reviews from course.sjtu.plus."""
     detail, err = _course_plus_request(f"/api/course/{course_id}")
     if err:
         return {"error": err}
@@ -1806,7 +1887,6 @@ def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
         "url":         f"{_COURSE_PLUS_BASE}/course/{course_id}",
     }
 
-    # Fetch reviews
     review_data, _ = _course_plus_request(f"/api/course/{course_id}/review", {
         "order_by": "updated_at",
         "page_size": min(max(1, max_reviews), 20),
@@ -1825,7 +1905,6 @@ def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
         result["review_total"] = review_data.get("total", len(reviews))
 
     return result
-
 
 
 def tool_save_credentials(
