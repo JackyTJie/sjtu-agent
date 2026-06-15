@@ -1684,154 +1684,33 @@ _COURSE_PLUS_BASE = "https://course.sjtu.plus"
 
 
 def tool_setup_course_community(username: str = "", password: str = "") -> dict:
-    """登录 course.sjtu.plus 并保存 session cookie。
+    """Login to course.sjtu.plus and save session cookie.
 
-    课程社区登录页提供两个 tab：
-      - 「邮箱密码登录」：POST /oauth/email/login/ {account: "<user>@sjtu.edu.cn", password}
-      - 「账号登录」    ：POST /oauth/login/        {username, password}
-    站内说明：用户通常用 jAccount 邮箱注册，密码自行设定（很多人会和 jAccount 一致）。
-
-    默认行为：
-      - username 缺省 → 使用 cfg['course_sjtu_username'] 或 env JACCOUNT_USERNAME
-      - password 缺省 → 使用 cfg['course_sjtu_password'] 或 env JACCOUNT_PASSWORD
-    先尝试 email 端点（account = "<username>@sjtu.edu.cn"），失败再回落到 username 端点。
+    Note: 2026-06 the site was rebuilt as React SPA + GraphQL. Old REST
+    login endpoints no longer work. Returns placeholder until new API is adapted.
     """
-    import requests as _rq
-
-    cfg = {}
-    if CONFIG_PATH.exists():
-        try:
-            cfg = json.loads(CONFIG_PATH.read_text())
-        except Exception:
-            pass
-
-    username = (username or cfg.get("course_sjtu_username")
-                or os.environ.get("JACCOUNT_USERNAME", "")).strip()
-    password = (password or cfg.get("course_sjtu_password")
-                or os.environ.get("JACCOUNT_PASSWORD", "")).strip()
-
-    if not username or not password:
-        return {
-            "error": "未找到 course.sjtu.plus 账号密码，也未配置 jAccount 凭证",
-            "next_action": (
-                "请先配置 jAccount（save_credentials），或直接告诉我 course.sjtu.plus 上"
-                "的用户名密码。注册地址：https://course.sjtu.plus/login 用 jAccount 邮箱验证码登录。"
-            ),
-        }
-
-    account_email = username if "@" in username else f"{username}@sjtu.edu.cn"
-
-    sess = _rq.Session()
-    sess.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Referer": _COURSE_PLUS_BASE + "/login",
-        "Origin": _COURSE_PLUS_BASE,
-    })
-
-    try:
-        sess.get(_COURSE_PLUS_BASE + "/", timeout=10)
-    except Exception:
-        pass
-    # Django CSRF：cookie 里的 csrftoken 必须回传到 X-CSRFToken header
-    _csrf = sess.cookies.get("csrftoken")
-    if _csrf:
-        sess.headers["X-CSRFToken"] = _csrf
-
-    bare_user = username.split("@")[0]
-
-    attempts = [
-        ("email",    "/oauth/email/login/", {"account": bare_user, "password": password}),
-        ("username", "/oauth/login/",       {"username": bare_user, "password": password}),
-    ]
-
-    last_err = None
-    for kind, path, payload in attempts:
-        try:
-            r = sess.post(_COURSE_PLUS_BASE + path, json=payload, timeout=15)
-        except Exception as e:
-            last_err = f"[{kind}] 请求失败：{e}"
-            continue
-
-        if r.status_code == 200:
-            new_session = dict(sess.cookies.get_dict())
-            if not new_session.get("sessionid"):
-                last_err = f"[{kind}] HTTP 200 但响应未包含 sessionid cookie"
-                continue
-            try:
-                verify = sess.get(f"{_COURSE_PLUS_BASE}/api/me/", timeout=10)
-                me_info = verify.json() if verify.status_code == 200 else None
-                if verify.status_code in (401, 403):
-                    last_err = f"[{kind}] cookie 校验失败（/api/me/ {verify.status_code}）"
-                    continue
-            except Exception:
-                me_info = None
-
-            cfg["course_sjtu_cookies"] = new_session
-            cfg["course_sjtu_username"] = username
-            cfg["course_sjtu_password"] = password
-            CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
-            return {
-                "success": True,
-                "message": f"选课社区登录成功（{kind} 端点）",
-                "logged_in_as": (me_info or {}).get("username") if isinstance(me_info, dict) else None,
-            }
-
-        detail = ""
-        try:
-            detail = r.json().get("detail") or r.text[:200]
-        except Exception:
-            detail = r.text[:200]
-        last_err = f"[{kind}] HTTP {r.status_code}：{detail}"
-        # 400/401/403 都是凭据错（站点用 400 "用户名或密码错误。"）；密码相同不必再试另一端点
-        if r.status_code in (400, 401, 403) and kind == "email":
-            return {
-                "error": f"登录失败：{last_err}",
-                "next_action": (
-                    "course.sjtu.plus 站内密码看起来和 jAccount 不一致。"
-                    "请去 https://course.sjtu.plus/login 用「邮箱验证登录」登入后，"
-                    "在「偏好设置」里查看/重置站内密码，然后告诉我，调用 "
-                    "setup_course_community(password='<站内密码>') 完成配置。"
-                ),
-            }
-
-    return {"error": f"两种登录方式都失败：{last_err}"}
+    return {
+        "ok": False,
+        "error": (
+            "选课社区近日更新了网站架构（REST → React SPA + GraphQL），"
+            "原有登录接口已变更。请直接访问 https://course.sjtu.plus/login 手动登录。"
+            "我们正在适配新的认证流程。"
+        ),
+    }
 
 
 def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
-    """带 cookie 调 course.sjtu.plus 私有 API，自动重试。返回 (data_or_None, error_str_or_None)。"""
-    import time as _time
-    import requests as _rq
+    """Call course.sjtu.plus private API with cookie.
 
-    cfg = dc.load_config()
-    cookies = cfg.get("course_sjtu_cookies") or {}
-    if not cookies:
-        return None, "选课社区未配置，请说「配置选课社区」完成登录"
-
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Referer": _COURSE_PLUS_BASE + "/",
-    }
-    url = _COURSE_PLUS_BASE + path
-    last_err = None
-    for attempt in range(max_retry):
-        try:
-            r = _rq.get(url, params=params or {}, headers=headers, cookies=cookies, timeout=15)
-            if r.status_code == 429:
-                _time.sleep(15 * (attempt + 1))
-                continue
-            if r.status_code in (401, 403):
-                return None, "选课社区凭证已过期，请说「配置选课社区」重新授权"
-            if r.status_code == 404:
-                return None, "选课社区返回 404（资源不存在或路径已变）"
-            r.raise_for_status()
-            return r.json(), None
-        except Exception as e:
-            last_err = str(e)
-            _time.sleep(1 + attempt)
-    return None, f"选课社区请求失败：{last_err}"
+    Note: 2026-06 old REST API (/api/search/, /api/me/, /api/course/{id}/) is offline.
+    New site uses GraphQL (/graphql) with CSRF token + session cookie.
+    Returns placeholder error until new API is adapted.
+    """
+    return None, (
+        "选课社区近日更新了网站架构（REST → GraphQL + SPA），"
+        "原有 API 接口已下线。我们正在适配新的 GraphQL API，"
+        "暂时请直接访问 https://course.sjtu.plus 查看课程评价。"
+    )
 
 
 def tool_search_courses(query: str, page_size: int = 8) -> dict:
