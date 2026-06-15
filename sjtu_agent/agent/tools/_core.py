@@ -1836,14 +1836,14 @@ def tool_search_courses(query: str, page_size: int = 8) -> dict:
     if not query.strip():
         return {"error": "请提供搜索关键词"}
     data, err = _course_plus_request("/api/course/", {
-        "search": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
+        "q": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
     })
     if err:
         if "需要登录" in err:
             login = tool_setup_course_community()
             if login.get("ok"):
                 data, err = _course_plus_request("/api/course/", {
-                    "search": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
+                    "q": query.strip(), "page_size": min(max(1, page_size), 20), "page": 1,
                 }, max_retry=1)
         if err:
             return {"error": err}
