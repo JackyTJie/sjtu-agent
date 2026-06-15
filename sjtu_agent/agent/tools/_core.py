@@ -1692,19 +1692,18 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
     import requests as _rq
     from sjtu_agent.paths import CONFIG_PATH as _CFG
 
-    email = (username or "").strip()
+    user = (username or "").strip()
     pwd = (password or "").strip()
-    if not email:
-        email = _os.environ.get("JACCOUNT_USERNAME", "").strip()
+    if not user:
+        user = _os.environ.get("JACCOUNT_USERNAME", "").strip()
     if not pwd:
         pwd = _os.environ.get("JACCOUNT_PASSWORD", "").strip()
-    if not email or not pwd:
+    if not user or not pwd:
         return {
-            "error": "未找到 jAccount 凭据（JACCOUNT_USERNAME/JACCOUNT_PASSWORD）",
-            "next_action": "请先配置 jAccount 后再试。"
+            "error": "未找到 jAccount 凭据。请先运行 sjtu-agent setup 或在对话中说「配置 jAccount」。"
         }
-    if "@" not in email:
-        email = email + "@sjtu.edu.cn"
+    # 登录页第一个 input placeholder 是 "jAccount"（用户名，非邮箱），
+    # 第二个是 "选课社区密码，非 jAccount 密码"
 
     try:
         from playwright.sync_api import sync_playwright
@@ -1720,18 +1719,17 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
 
             # Navigate to login page
             page.goto("https://course.sjtu.plus/login", wait_until="networkidle", timeout=30_000)
-            _time.sleep(1)
+            _time.sleep(2)
 
-            # Fill in login form
-            email_input = page.locator("input[type=email], input[name=email], input[placeholder*=邮箱]")
-            pwd_input = page.locator("input[type=password], input[name=password]")
-            if email_input.count() > 0 and pwd_input.count() > 0:
-                email_input.first.fill(email)
-                pwd_input.first.fill(pwd)
-                # Click submit button
-                submit = page.locator("button[type=submit], button:has-text('登录'), button:has-text('登 录')")
-                if submit.count() > 0:
-                    submit.first.click()
+            # Fill in login form: username + password
+            inputs = page.locator("input")
+            if inputs.count() >= 2:
+                inputs.nth(0).fill(user)     # jAccount username
+                inputs.nth(1).fill(pwd)      # site password
+                # Click login button
+                btn = page.locator("button:has-text('登录')")
+                if btn.count() > 0:
+                    btn.first.click()
                     _time.sleep(5)
                     try:
                         page.wait_for_load_state("networkidle", timeout=20_000)
