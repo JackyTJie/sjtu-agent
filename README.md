@@ -264,6 +264,10 @@ sjtu-agent install-daemons
 
 ---
 
+## 健壮性
+
+飞书 Bot 启动时自检凭据、ChromaDB、Agent API 连通性；每 30s 写心跳文件供启动器监控（>90s 无心跳 → 无响应）；退出时自动清理线程池和临时文件。
+
 ## 版本
 
-当前版本：**v0.3.2**。发布历史见 [Releases](https://github.com/kuan-er/sjtu-agent/releases)。
+当前版本：**v0.3.3**。发布历史见 [Releases](https://github.com/kuan-er/sjtu-agent/releases)。
