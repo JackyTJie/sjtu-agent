@@ -1,9 +1,7 @@
 """Tests for feishu_bot.py core functions — no WebSocket connection required."""
 
 import json
-import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -11,16 +9,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-
-# feishu_bot.py does sys.exit(1) at module level if no config.json found.
-# Create a minimal fake config so the module can be imported in CI.
-_fake_home = tempfile.mkdtemp(prefix="sjtu_test_feishu_")
-_fake_config = Path(_fake_home) / "config.json"
-_fake_config.write_text(json.dumps({
-    "feishu_app_id": "cli_test",
-    "feishu_app_secret": "test_secret",
-}), encoding="utf-8")
-os.environ["SJTU_AGENT_HOME"] = _fake_home
 
 
 # ── _extract_text ────────────────────────────────────────────────────────────
