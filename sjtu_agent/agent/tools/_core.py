@@ -1713,10 +1713,10 @@ def tool_setup_course_community(username: str = "", password: str = "") -> dict:
         "Origin": "https://course.sjtu.plus",
     })
 
-    # Step 1: Get CSRF token from /api/system-settings
+    # Step 1: Get CSRF token from /api/auth/csrf (Django standard endpoint)
     csrf_token = ""
     try:
-        r0 = sess.get("https://course.sjtu.plus/api/system-settings", timeout=15)
+        r0 = sess.get("https://course.sjtu.plus/api/auth/csrf", timeout=15)
         csrf_token = r0.headers.get("X-Csrf-Token", "")
     except Exception:
         pass
