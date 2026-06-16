@@ -521,6 +521,17 @@ _TOOL_LABELS = {
 
     "setup_canvas":          "正在引导配置 Canvas",
 
+    "list_canvas_folders":     "正在浏览 Canvas 文件夹",
+    "list_canvas_files":       "正在列出 Canvas 文件",
+    "canvas_file_tree":        "正在构建 Canvas 文件树",
+    "download_canvas_file":    "正在下载 Canvas 文件",
+    "canvas_track_mark":       "正在标记文件已处理",
+    "canvas_track_unmark":     "正在取消标记",
+    "canvas_track_list":       "正在列出已处理文件",
+    "canvas_track_status":     "正在查看处理进度",
+    "canvas_track_diff":       "正在查看未处理文件",
+    "canvas_track_mark_course":"正在标记全部文件已处理",
+
     "setup_shuiyuan":          "正在授权水源社区",
 
     "add_mcp_server":          "正在添加自定义 MCP Server",

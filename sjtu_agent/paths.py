@@ -42,6 +42,8 @@ AGENT_CONFIG_PATH = DATA_DIR / "agent_config.json"
 REMINDERS_PATH = DATA_DIR / "reminders.json"
 REMIND_STATE_PATH = DATA_DIR / "remind_state.json"
 CANVAS_MONITOR_STATE_PATH = DATA_DIR / "canvas_monitor_state.json"
+CANVAS_PROCESSED_FILES_PATH = DATA_DIR / "canvas_processed_files.json"
+CANVAS_DOWNLOADS_DIR = DATA_DIR / "canvas_downloads"
 MYSJTU_CATALOG_PATH = DATA_DIR / "mysjtu_catalog.json"
 SCHEDULE_CACHE_PATH = DATA_DIR / ".schedule_cache.json"
 
@@ -172,6 +174,8 @@ def describe_runtime_paths() -> dict[str, str]:
         "agent_config_path": str(AGENT_CONFIG_PATH),
         "reminders_path": str(REMINDERS_PATH),
         "canvas_monitor_state_path": str(CANVAS_MONITOR_STATE_PATH),
+        "canvas_processed_files_path": str(CANVAS_PROCESSED_FILES_PATH),
+        "canvas_downloads_dir": str(CANVAS_DOWNLOADS_DIR),
         "mysjtu_catalog_path": str(MYSJTU_CATALOG_PATH),
         "schedule_cache_path": str(SCHEDULE_CACHE_PATH),
     }

@@ -4,6 +4,7 @@ import hashlib
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -415,6 +416,248 @@ class CanvasClient:
             "warnings": warnings,
         }
 
+    # ── File / Folder Methods ────────────────────────────────────────────
+
+    def list_folders(self, course_id: int, folder_id: int | None = None) -> dict:
+        """List folders in a course or inside a specific folder."""
+        if folder_id:
+            path = f"/api/v1/folders/{folder_id}/folders"
+        else:
+            path = f"/api/v1/courses/{course_id}/folders"
+        payload = self._get_all_pages(path, {"per_page": 100})
+        folders = [
+            {
+                "id": f["id"],
+                "name": f.get("name", ""),
+                "full_name": f.get("full_name", ""),
+                "parent_folder_id": f.get("parent_folder_id"),
+                "context_type": f.get("context_type", ""),
+                "context_id": f.get("context_id"),
+                "files_count": f.get("files_count", 0),
+                "folders_count": f.get("folders_count", 0),
+                "created_at": f.get("created_at"),
+                "updated_at": f.get("updated_at"),
+            }
+            for f in payload
+            if isinstance(f, dict)
+        ]
+        return {"ok": True, "count": len(folders), "folders": folders}
+
+    def list_files(
+        self,
+        course_id: int,
+        folder_id: int | None = None,
+        search: str | None = None,
+    ) -> dict:
+        """List files in a course, optionally under a specific folder or filtered by search term."""
+        if folder_id:
+            path = f"/api/v1/folders/{folder_id}/files"
+        else:
+            path = f"/api/v1/courses/{course_id}/files"
+        params: dict = {"per_page": 100}
+        if search:
+            params["search_term"] = search
+        payload = self._get_all_pages(path, params)
+        files = [
+            {
+                "id": f["id"],
+                "display_name": f.get("display_name", ""),
+                "filename": f.get("filename", ""),
+                "size": f.get("size", 0),
+                "size_human": _format_size(f.get("size", 0)),
+                "mime_class": f.get("mime_class", ""),
+                "content_type": f.get("content-type", ""),
+                "folder_id": f.get("folder_id"),
+                "url": f.get("url", ""),
+                "updated_at": f.get("updated_at"),
+            }
+            for f in payload
+            if isinstance(f, dict)
+        ]
+        return {"ok": True, "count": len(files), "files": files}
+
+    def get_file(self, file_id: int) -> dict:
+        """Get file metadata by file ID."""
+        payload, _ = self._get_json(f"/api/v1/files/{file_id}")
+        if not isinstance(payload, dict):
+            raise CanvasError("unexpected_schema", "文件信息不是对象")
+        return {
+            "ok": True,
+            "file": {
+                "id": payload.get("id"),
+                "display_name": payload.get("display_name", ""),
+                "filename": payload.get("filename", ""),
+                "size": payload.get("size", 0),
+                "size_human": _format_size(payload.get("size", 0)),
+                "mime_class": payload.get("mime_class", ""),
+                "content_type": payload.get("content-type", ""),
+                "folder_id": payload.get("folder_id"),
+                "url": payload.get("url", ""),
+                "updated_at": payload.get("updated_at"),
+                "created_at": payload.get("created_at"),
+            },
+        }
+
+    def _fetch_all_folders(self, course_id: int) -> dict[int, dict]:
+        """Fetch all folders in a course, returning {folder_id: folder_dict}."""
+        raw = self._get_all_pages(f"/api/v1/courses/{course_id}/folders", {"per_page": 100})
+        return {f["id"]: f for f in raw if isinstance(f, dict)}
+
+    def get_folder_tree(self, course_id: int) -> dict:
+        """Get the full folder/file tree for a course."""
+        folders_dict = self._fetch_all_folders(course_id)
+
+        # Build parent-child folder mapping
+        folder_children: dict[int, list[dict]] = {}
+        root_folders: list[dict] = []
+        for fid, f in folders_dict.items():
+            pid = f.get("parent_folder_id")
+            if pid and pid in folders_dict:
+                folder_children.setdefault(pid, []).append(f)
+            else:
+                root_folders.append(f)
+
+        # Sort by name
+        for pid in folder_children:
+            folder_children[pid].sort(key=lambda x: x.get("name", "").lower())
+        root_folders.sort(key=lambda x: x.get("name", "").lower())
+
+        # Warn count estimate
+        total_folders = len(folders_dict)
+
+        def _build_node(folder: dict, depth: int = 0) -> dict:
+            """Recursively build a tree node with files and subfolders."""
+            node: dict = {
+                "id": folder["id"],
+                "name": folder.get("name", "?"),
+                "full_name": folder.get("full_name", ""),
+                "depth": depth,
+                "files": [],
+                "folders": [],
+            }
+
+            # Fetch files in this folder
+            try:
+                files_raw = self._get_all_pages(
+                    f"/api/v1/folders/{folder['id']}/files",
+                    {"per_page": 100},
+                )
+                files_raw.sort(key=lambda x: x.get("display_name", "").lower())
+                for f in files_raw:
+                    if not isinstance(f, dict):
+                        continue
+                    node["files"].append({
+                        "id": f["id"],
+                        "display_name": f.get("display_name", "?"),
+                        "size": f.get("size", 0),
+                        "size_human": _format_size(f.get("size")),
+                        "mime_class": f.get("mime_class", ""),
+                        "folder_id": f.get("folder_id"),
+                        "updated_at": f.get("updated_at"),
+                    })
+            except CanvasError:
+                node.setdefault("warnings", []).append(f"Could not fetch files for folder {folder['id']}")
+
+            # Recurse into subfolders
+            for child in folder_children.get(folder["id"], []):
+                node["folders"].append(_build_node(child, depth + 1))
+
+            return node
+
+        tree: list[dict] = []
+        if not root_folders:
+            # Try root-level files
+            try:
+                files_raw = self._get_all_pages(
+                    f"/api/v1/courses/{course_id}/files",
+                    {"per_page": 100},
+                )
+                files_raw.sort(key=lambda x: x.get("display_name", "").lower())
+                root_files = [
+                    {
+                        "id": f["id"],
+                        "display_name": f.get("display_name", "?"),
+                        "size": f.get("size", 0),
+                        "size_human": _format_size(f.get("size")),
+                        "mime_class": f.get("mime_class", ""),
+                        "folder_id": f.get("folder_id"),
+                        "updated_at": f.get("updated_at"),
+                    }
+                    for f in files_raw
+                    if isinstance(f, dict)
+                ]
+                if root_files:
+                    tree.append({
+                        "id": None,
+                        "name": "(root)",
+                        "full_name": "",
+                        "depth": 0,
+                        "files": root_files,
+                        "folders": [],
+                    })
+            except CanvasError:
+                pass
+        else:
+            for folder in root_folders:
+                tree.append(_build_node(folder))
+
+        return {
+            "ok": True,
+            "course_id": course_id,
+            "total_folders": total_folders,
+            "tree": tree,
+        }
+
+    def download_file(self, file_id: int, output_dir: str | None = None) -> dict:
+        """Download a Canvas file by file ID.
+
+        Step 1: Get file metadata to obtain the download URL.
+        Step 2: Stream the download to disk.
+        """
+        # Get file metadata
+        file_info = self.get_file(file_id)
+        if not file_info.get("ok"):
+            return file_info
+        meta = file_info["file"]
+        download_url = meta.get("url")
+        if not download_url:
+            raise CanvasError("no_download_url", f"文件 {file_id} 没有下载 URL")
+
+        display_name = meta.get("display_name", f"file_{file_id}")
+        safe_name = _sanitize_filename(display_name)
+        out_dir = Path(output_dir) if output_dir else _canvas_downloads_dir()
+        out_dir = out_dir.resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = out_dir / safe_name
+
+        try:
+            # Download — use a fresh session without auth header for the CDN redirect
+            dl_response = requests.get(download_url, timeout=300, stream=True)
+            dl_response.raise_for_status()
+            with open(output_path, "wb") as fh:
+                for chunk in dl_response.iter_content(chunk_size=8192):
+                    fh.write(chunk)
+        except requests.HTTPError as exc:
+            raise CanvasError(
+                "download_error",
+                f"下载失败: HTTP {exc.response.status_code if exc.response else '?'}",
+            ) from exc
+        except requests.RequestException as exc:
+            raise CanvasError("download_error", f"下载失败: {exc}") from exc
+
+        file_size = meta.get("size", 0)
+        return {
+            "success": True,
+            "file_id": file_id,
+            "display_name": display_name,
+            "saved_to": str(output_path),
+            "size": file_size,
+            "size_human": _format_size(file_size),
+        }
+
+    # ── Normalize helpers ────────────────────────────────────────────────
+
     def _normalize_course(self, course: dict) -> dict:
         return {
             "course_id": course.get("id"),
@@ -526,6 +769,28 @@ def _parse_dt(value: str | None):
         return dt.astimezone(CST)
     except Exception:
         return None
+
+
+def _format_size(size_bytes: int | None) -> str:
+    """Human-readable file size."""
+    if size_bytes is None:
+        return "?"
+    for unit in ("B", "KB", "MB", "GB"):
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} B"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+def _sanitize_filename(name: str) -> str:
+    """Replace unsafe filename characters with underscores."""
+    return re.sub(r'[^\w\-\. ]', '_', name)
+
+
+def _canvas_downloads_dir() -> Path:
+    """Get the default Canvas downloads directory (lazy import to avoid circular deps)."""
+    from sjtu_agent.paths import CANVAS_DOWNLOADS_DIR
+    return CANVAS_DOWNLOADS_DIR
 
 
 def _is_current_canvas_item(item: dict) -> bool:
