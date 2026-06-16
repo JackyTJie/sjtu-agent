@@ -1830,7 +1830,24 @@ def _dyweb_refresh_token(cfg: dict) -> str:
                 submit = page.locator("#submit-password-button")
                 if submit.count() > 0 and submit.is_visible():
                     submit.click()
-                    time.sleep(5)
+                    time.sleep(3)
+
+                # Handle CAPTCHA if triggered
+                captcha = page.locator("#input-login-captcha")
+                if captcha.count() > 0 and captcha.is_visible():
+                    captcha_img = page.locator("#captcha-img, img[src*=captcha]")
+                    if captcha_img.count() > 0:
+                        try:
+                            img_bytes = captcha_img.first.screenshot()
+                            from login import _solve_captcha
+                            code = _solve_captcha(img_bytes)
+                            if code:
+                                captcha.fill(code)
+                                if submit.count() > 0 and submit.is_visible():
+                                    submit.click()
+                                    time.sleep(3)
+                        except Exception:
+                            pass
 
             # Follow redirects to dyweb callback
             for _ in range(12):
