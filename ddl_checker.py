@@ -1849,17 +1849,26 @@ def _dyweb_refresh_token(cfg: dict) -> str:
                         except Exception:
                             pass
 
-            # Follow redirects to dyweb callback
+            # Follow redirects to dyweb callback (page body contains JWT)
             for _ in range(12):
                 if "share.dyweb.sjtu.cn" in page.url:
                     break
                 time.sleep(2)
 
-            # Collect sjtu_token
-            for c in ctx.cookies():
-                if c["name"] == "sjtu_token":
-                    token = c["value"]
-                    break
+            # New site uses JWT Bearer token, not cookie
+            if "share.dyweb.sjtu.cn" in page.url:
+                try:
+                    body = page.locator("body").text_content()
+                    data = json.loads(body) if body else {}
+                    token = data.get("data", "")
+                except Exception:
+                    token = ""
+            # Fallback: check for cookie (old site)
+            if not token:
+                for c in ctx.cookies():
+                    if c["name"] == "sjtu_token":
+                        token = c["value"]
+                        break
         except Exception as e:
             print(f"[dyweb] OAuth 失败：{e}")
         finally:
