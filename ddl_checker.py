@@ -1952,10 +1952,17 @@ def _search_dyweb(cfg: dict, query: str, max_results: int = 6,
         if mats_data is None:
             continue
 
-        # 合并 unarchived + archived
-        unarchived = mats_data.get("unarchived") or [] if isinstance(mats_data, dict) else []
-        archived   = mats_data.get("archived") or [] if isinstance(mats_data, dict) else []
-        all_mats   = unarchived + archived
+        # 新版 API (2026-06): materials nested in classes[].materials[]
+        all_mats = []
+        classes = mats_data.get("classes") or [] if isinstance(mats_data, dict) else []
+        for cls in classes:
+            for m in (cls.get("materials") or []):
+                all_mats.append(m)
+        # Fallback: old format with unarchived/archived
+        if not all_mats:
+            unarchived = mats_data.get("unarchived") or [] if isinstance(mats_data, dict) else []
+            archived   = mats_data.get("archived") or [] if isinstance(mats_data, dict) else []
+            all_mats   = unarchived + archived
 
         # 过滤并排序（按下载量）
         if query:
@@ -1963,21 +1970,22 @@ def _search_dyweb(cfg: dict, query: str, max_results: int = 6,
             filtered = [m for m in all_mats if q in (m.get("name") or "").lower()
                         or q in (m.get("description") or "").lower()]
             if not filtered:
-                filtered = all_mats  # 关键词在课程名命中，返回全部材料
+                filtered = all_mats
         else:
             filtered = all_mats
 
-        filtered.sort(key=lambda m: m.get("download_count") or 0, reverse=True)
+        filtered.sort(key=lambda m: m.get("purchase_count") or m.get("download_count") or 0, reverse=True)
 
         materials = []
-        for m in filtered[:5]:
-            mtype = _DYWEB_MATERIAL_TYPES.get(m.get("material_type_id", 0), "其他")
+        for m in filtered[:8]:
+            mt = m.get("material_type") or {}
+            mtype = mt.get("name", "其他") if isinstance(mt, dict) else _DYWEB_MATERIAL_TYPES.get(m.get("material_type_id", 0), "其他")
             materials.append({
-                "name":      m.get("name", ""),
+                "name":      m.get("name", "") or m.get("file_name", ""),
                 "type":      mtype,
                 "ext":       m.get("ext", ""),
-                "downloads": m.get("download_count", 0),
-                "points":    m.get("point", 0),
+                "downloads": m.get("purchase_count") or m.get("download_count", 0),
+                "points":    m.get("points") or m.get("point", 0),
                 "url":       f"https://share.dyweb.sjtu.cn/course/{cid}",
             })
 
