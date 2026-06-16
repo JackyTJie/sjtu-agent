@@ -1771,7 +1771,8 @@ _DYWEB_MATERIAL_TYPES = {1: "课件", 2: "答案", 3: "实验报告", 4: "参考
 
 
 def _dyweb_refresh_token(cfg: dict) -> str:
-    """通过 Playwright 点击登录按钮刷新 sjtu_token，保存到 config，返回新 token。"""
+    """通过 Playwright + jAccount OAuth 刷新 sjtu_token。新站 (2026-06) 使用
+    OAuth2 授权码流程：获取 config → 跳转 jAccount → 填密码登录 → 回调 dyweb。"""
     if not HAS_PLAYWRIGHT:
         return ""
     try:
@@ -1779,35 +1780,71 @@ def _dyweb_refresh_token(cfg: dict) -> str:
         load_dotenv()
     except ImportError:
         pass
-    jaccount_cookies = cfg.get("jaccount_cookies", {})
-    if not jaccount_cookies:
+
+    jc_user = os.environ.get("JACCOUNT_USERNAME", "").strip()
+    jc_pwd = os.environ.get("JACCOUNT_PASSWORD", "").strip()
+    if not jc_user or not jc_pwd:
         return ""
 
-    import time
+    import time, urllib.parse
+    # Step 1: Get OAuth config
+    try:
+        r = requests.get(
+            "https://api-v2.share.dyweb.sjtu.cn/auth/jaccount/config",
+            params={"redirect_uri": "https://share.dyweb.sjtu.cn/auth/jaccount/callback"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        oauth_cfg = r.json().get("data", {})
+        if not oauth_cfg.get("client_id"):
+            return ""
+    except Exception:
+        return ""
+
+    params = {
+        "response_type": "code",
+        "client_id": oauth_cfg["client_id"],
+        "redirect_uri": oauth_cfg["redirect_uri"],
+        "state": oauth_cfg["state"],
+        "scope": "profile",
+    }
+    auth_url = ("https://jaccount.sjtu.edu.cn/oauth2/authorize?"
+                + urllib.parse.urlencode(params))
+
+    # Step 2: Playwright — fill jAccount form, submit, follow to dyweb
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context()
-        ctx.add_cookies([
-            {"name": k, "value": v, "domain": "jaccount.sjtu.edu.cn", "path": "/"}
-            for k, v in jaccount_cookies.items()
-        ])
         page = ctx.new_page()
+        token = ""
         try:
-            page.goto("https://share.dyweb.sjtu.cn/", wait_until="networkidle", timeout=30_000)
-            time.sleep(1)
-            btn = page.locator("text=使用 jAccount 登录")
-            if btn.count() > 0:
-                btn.first.click()
-                time.sleep(3)
-                page.wait_for_load_state("networkidle", timeout=15_000)
-            token = next(
-                (c["value"] for c in ctx.cookies(["https://share.dyweb.sjtu.cn"])
-                 if c["name"] == "sjtu_token"),
-                ""
-            )
+            page.goto(auth_url, wait_until="networkidle", timeout=30_000)
+            time.sleep(2)
+
+            # Fill jAccount password login form
+            user_el = page.locator("#input-login-user")
+            pass_el = page.locator("#input-login-pass")
+            if user_el.count() > 0 and pass_el.count() > 0:
+                user_el.fill(jc_user)
+                pass_el.fill(jc_pwd)
+                submit = page.locator("#submit-password-button")
+                if submit.count() > 0 and submit.is_visible():
+                    submit.click()
+                    time.sleep(5)
+
+            # Follow redirects to dyweb callback
+            for _ in range(12):
+                if "share.dyweb.sjtu.cn" in page.url:
+                    break
+                time.sleep(2)
+
+            # Collect sjtu_token
+            for c in ctx.cookies():
+                if c["name"] == "sjtu_token":
+                    token = c["value"]
+                    break
         except Exception as e:
-            print(f"[dyweb] 刷新 token 失败：{e}")
-            token = ""
+            print(f"[dyweb] OAuth 失败：{e}")
         finally:
             browser.close()
 
