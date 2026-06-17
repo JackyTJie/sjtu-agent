@@ -54,6 +54,12 @@ except ImportError:
 
 import ddl_checker as dc
 from sjtu_agent.canvas_client import CanvasError, make_client_from_config
+from sjtu_agent.agent.tools._canvas_utils import (
+    _make_canvas_client,
+    _canvas_error_payload,
+    _resolve_canvas_course_or_error,
+    _canvas_settings_url,
+)
 from sjtu_agent.canvas_monitor import update_canvas_monitor_config
 
 from sjtu_agent.agent.tools._reminders import (
@@ -84,6 +90,14 @@ from sjtu_agent.agent.tools._platforms import (
 from sjtu_agent.agent.tools._mcp_skills import (
     TOOLS_ENTRIES as _MCP_SKILLS_TOOLS,
     tool_add_mcp_server, tool_add_skill, tool_create_skill, tool_list_skills, tool_manage_skill,
+)
+
+from sjtu_agent.agent.tools._canvas_files import (
+    TOOLS_ENTRIES as _CANVAS_FILES_TOOLS,
+    tool_list_canvas_folders, tool_list_canvas_files, tool_canvas_file_tree,
+    tool_download_canvas_file,
+    tool_canvas_track_mark, tool_canvas_track_unmark, tool_canvas_track_list,
+    tool_canvas_track_status, tool_canvas_track_diff, tool_canvas_track_mark_course,
 )
 
 TOOLS = [
@@ -829,6 +843,7 @@ TOOLS = [
         },
     },
     *_EMAIL_TOOLS,
+    *_CANVAS_FILES_TOOLS,
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -941,10 +956,6 @@ _MYSJTU_CATEGORY_ALIASES: dict[str, list[str]] = {
 _MYSJTU_SEARCH_ONLY_HINTS = {
     "图书馆", "教务", "教务服务", "校园卡", "信息服务", "生活服务", "财务", "后勤",
 }
-
-
-def _canvas_settings_url(base_url: str) -> str:
-    return base_url.rstrip("/") + "/profile/settings"
 
 
 def _canvas_openid_connect_url(base_url: str) -> str:
@@ -3209,26 +3220,6 @@ def tool_download_assignments(
     }
 
 
-def _make_canvas_client():
-    return make_client_from_config()
-
-
-def _canvas_error_payload(exc: CanvasError) -> dict:
-    payload = exc.to_dict()
-    if exc.code in ("missing_token", "invalid_token"):
-        base = dc.load_config().get("canvas_base_url", _CANVAS_DEFAULT_BASE_URL)
-        payload["settings_url"] = _canvas_settings_url(base)
-        payload["next_action"] = "请先调用 setup_canvas 获取或刷新 Canvas Token。"
-    return payload
-
-
-def _resolve_canvas_course_or_error(client, course) -> dict:
-    resolved = client.resolve_course(course)
-    if not resolved.get("ok"):
-        return resolved
-    return {"ok": True, "course": resolved["course"]}
-
-
 def tool_list_canvas_courses(include_tabs: bool = False, include_teachers: bool = False) -> dict:
     try:
         client = _make_canvas_client()
@@ -3528,6 +3519,16 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "configure_canvas_monitor": r = tool_configure_canvas_monitor(**args)
         elif name == "list_canvas_assignments":  r = tool_list_canvas_assignments(**args)
         elif name == "submit_canvas_assignment": r = tool_submit_canvas_assignment(**args)
+        elif name == "list_canvas_folders":      r = tool_list_canvas_folders(**args)
+        elif name == "list_canvas_files":        r = tool_list_canvas_files(**args)
+        elif name == "canvas_file_tree":         r = tool_canvas_file_tree(**args)
+        elif name == "download_canvas_file":     r = tool_download_canvas_file(**args)
+        elif name == "canvas_track_mark":        r = tool_canvas_track_mark(**args)
+        elif name == "canvas_track_unmark":      r = tool_canvas_track_unmark(**args)
+        elif name == "canvas_track_list":        r = tool_canvas_track_list()
+        elif name == "canvas_track_status":      r = tool_canvas_track_status(**args)
+        elif name == "canvas_track_diff":        r = tool_canvas_track_diff(**args)
+        elif name == "canvas_track_mark_course": r = tool_canvas_track_mark_course(**args)
         elif name == "read_emails":              r = tool_read_emails(**args)
         elif name == "search_emails":            r = tool_search_emails(**args)
         elif name == "send_email":               r = tool_send_email(**args)
