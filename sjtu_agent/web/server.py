@@ -803,6 +803,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not _check_auth(self): self._send_json({"error":"unauthorized"}, 403); return
             self._send_json(_get_status())
         elif path == "/api/wechat/qr_status":
+            if not _check_auth(self): self._send_json({"error":"unauthorized"}, 403); return
             from urllib.parse import parse_qs
             qs = parse_qs(urlparse(self.path).query)
             key = qs.get("key", [""])[0]

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -2442,6 +2443,17 @@ def tool_get_schedule(
         return dc.get_schedule_for_date(cfg, date_str=date, refresh=refresh)
 
 
+def _validate_mysjtu_url(url: str) -> str | None:
+    """Validate URL belongs to *.sjtu.edu.cn. Returns error message or None."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"不支持的协议: {parsed.scheme}"
+    host = (parsed.hostname or "").lower()
+    if not host.endswith(".sjtu.edu.cn") and host != "sjtu.edu.cn":
+        return f"不允许访问外部域名: {host}"
+    return None
+
+
 def tool_browse_mysjtu(task: str, start_url: str = "https://my.sjtu.edu.cn", action: str = "") -> dict:
     """
     用 Playwright 打开 my.sjtu.edu.cn，执行可选操作，返回页面文字内容。
@@ -2451,6 +2463,11 @@ def tool_browse_mysjtu(task: str, start_url: str = "https://my.sjtu.edu.cn", act
         from playwright.sync_api import sync_playwright as _spw
     except ImportError:
         return {"error": "未安装 playwright"}
+
+    # 防 SSRF — 只允许 *.sjtu.edu.cn
+    err = _validate_mysjtu_url(start_url)
+    if err:
+        return {"error": err}
 
     cfg = dc.load_config()
     jaccount_cookies = cfg.get("jaccount_cookies", {})
@@ -2514,6 +2531,10 @@ def tool_browse_mysjtu(task: str, start_url: str = "https://my.sjtu.edu.cn", act
                             break
                 elif effective_action.startswith("goto:"):
                     url = effective_action[5:].strip()
+                    err = _validate_mysjtu_url(url)
+                    if err:
+                        browser.close()
+                        return {"error": err}
                     page.goto(url, wait_until="domcontentloaded", timeout=15_000)
                     page.wait_for_timeout(1000)
                 elif effective_action.startswith("search:"):
@@ -2710,6 +2731,26 @@ def tool_query_grades(year: str = "", semester: str = "") -> dict:
 
 
 
+def _validate_fetch_url(url: str) -> dict | None:
+    """Validate URL for tool_fetch_url — block private IPs and non-HTTP schemes.
+
+    Returns an error dict if invalid, None if OK.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return {"ok": False, "error": f"不支持的协议: {parsed.scheme}，仅允许 http/https"}
+    host = parsed.hostname
+    if not host:
+        return {"ok": False, "error": "无法解析 URL 主机名"}
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local:
+            return {"ok": False, "error": "不允许访问内网地址"}
+    except ValueError:
+        pass  # hostname, not IP — allow
+    return None
+
+
 def tool_fetch_url(url: str) -> dict:
     """
     抓取网页内容并提取纯文本。
@@ -2718,6 +2759,11 @@ def tool_fetch_url(url: str) -> dict:
     """
     import re
     from bs4 import BeautifulSoup
+
+    # URL 安全校验 — 防 SSRF
+    err = _validate_fetch_url(url)
+    if err:
+        return err
 
     # 微信公众号优先用 Playwright（绕过反爬）
     if "mp.weixin.qq.com" in url and HAS_PLAYWRIGHT:
@@ -2872,10 +2918,11 @@ def tool_read_assignment_file(
     max_chars: int = 8000,
     start_page: int = 1,
 ) -> dict:
-    path = Path(file_path)
-    if not path.exists():
-        # 尝试相对于脚本目录解析（防止 LLM 传入相对路径）
-        path = ROOT / file_path
+    path = Path(file_path).resolve()
+    if not path.is_relative_to(ROOT.resolve()):
+        path = (ROOT / file_path).resolve()
+    if not path.is_relative_to(ROOT.resolve()):
+        return {"error": f"路径越权: {file_path}"}
     if not path.exists():
         return {"error": f"文件不存在: {file_path}，请用 list_assignment_files 确认正确路径"}
     suffix = path.suffix.lower()
@@ -3064,9 +3111,11 @@ def tool_parse_local_file(
     Keeps read_assignment_file unchanged as fallback when strategy asks for legacy
     or when auto parse fails on PDF/HTML.
     """
-    path = Path(file_path)
-    if not path.exists():
-        path = ROOT / file_path
+    path = Path(file_path).resolve()
+    if not path.is_relative_to(ROOT.resolve()):
+        path = (ROOT / file_path).resolve()
+    if not path.is_relative_to(ROOT.resolve()):
+        return {"error": f"路径越权: {file_path}"}
     if not path.exists():
         return {"error": f"文件不存在: {file_path}，请确认路径"}
 

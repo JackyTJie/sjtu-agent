@@ -83,10 +83,13 @@ def run_matlab(hw_dir: str | Path, script_name: str = "_figures.m",
 
     # MATLAB -batch runs the command then exits
     # Need to cd to the directory first since latex files are there
+    # Escape single quotes for MATLAB string literals ('' → literal ')
+    _hw_dir_safe = str(hw_dir).replace("'", "''")
+    _script_safe = str(script_name).replace("'", "''")
     cmd = [
         MATLAB_BIN,
         "-batch",
-        f"cd('{hw_dir}'); run('{script_name}'); exit",
+        f"cd('{_hw_dir_safe}'); run('{_script_safe}'); exit",
     ]
 
     try:
