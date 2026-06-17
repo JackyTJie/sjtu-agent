@@ -28,6 +28,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from sjtu_agent.canvas_client import _format_size
 from sjtu_agent.paths import (
     CANVAS_PROCESSED_FILES_PATH,
     PROJECT_ROOT,
@@ -118,7 +119,7 @@ class CanvasFilesTracker:
                 "processed_at": info.get("processed_at", ""),
                 "notes": info.get("notes", ""),
                 "size": size_val,
-                "size_human": _format_size_human(size_val) if size_val else "?",
+                "size_human": _format_size(size_val),
             })
         items.sort(key=lambda x: x.get("processed_at") or "", reverse=True)
         return {"ok": True, "count": len(items), "files": items}
@@ -241,15 +242,3 @@ class CanvasFilesTracker:
         if legacy.exists() and legacy.is_file():
             self._path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(legacy, self._path)
-
-
-def _format_size_human(size_bytes: int | None) -> str:
-    """Human-readable file size (standalone copy to avoid circular import)."""
-    if size_bytes is None:
-        return "?"
-    s = float(size_bytes)
-    for unit in ("B", "KB", "MB", "GB"):
-        if s < 1024:
-            return f"{s:.1f} {unit}" if unit != "B" else f"{int(s)} B"
-        s /= 1024
-    return f"{s:.1f} TB"

@@ -632,8 +632,11 @@ class CanvasClient:
         output_path = out_dir / safe_name
 
         try:
-            # Download — use a fresh session without auth header for the CDN redirect
-            dl_response = requests.get(download_url, timeout=300, stream=True)
+            # Download using the authenticated session so CDN URLs that require
+            # the Bearer token work.  requests strips the Authorization header
+            # on cross-origin redirects, so the token won't leak to third-party
+            # CDNs.
+            dl_response = self.session.get(download_url, timeout=300, stream=True)
             dl_response.raise_for_status()
             with open(output_path, "wb") as fh:
                 for chunk in dl_response.iter_content(chunk_size=8192):
