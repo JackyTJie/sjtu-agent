@@ -79,14 +79,16 @@ def _extract_body(msg) -> str:
                 try:
                     payload = part.get_payload(decode=True)
                     if payload:
-                        body_parts.append(payload.decode("utf-8", errors="replace"))
+                        charset = part.get_content_charset() or "utf-8"
+                        body_parts.append(payload.decode(charset, errors="replace"))
                 except Exception:
                     pass
     else:
         try:
             payload = msg.get_payload(decode=True)
             if payload:
-                body_parts.append(payload.decode("utf-8", errors="replace"))
+                charset = msg.get_content_charset() or "utf-8"
+                body_parts.append(payload.decode(charset, errors="replace"))
         except Exception:
             pass
 
@@ -99,7 +101,8 @@ def _extract_body(msg) -> str:
                     payload = part.get_payload(decode=True)
                     if payload:
                         import re
-                        html = payload.decode("utf-8", errors="replace")
+                        charset = part.get_content_charset() or "utf-8"
+                        html = payload.decode(charset, errors="replace")
                         text = re.sub(r"<[^>]+>", "", html).strip()
                 except Exception:
                     pass
