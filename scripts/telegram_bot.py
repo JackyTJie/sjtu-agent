@@ -18,11 +18,13 @@ telegram_bot.py — 将 agent.py 接入 Telegram Bot
   /reminders    — 查看提醒事项列表
 """
 
+import atexit
 import base64
 import importlib
 import io
 import json
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -898,8 +900,8 @@ def cmd_news_reset(msg):
 
 # ── 文件 / 图片处理辅助 ───────────────────────────────────────────────────────
 
-# 临时文件目录（每次启动复用，进程退出后由 OS 自动清理）
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_tg_"))
+atexit.register(shutil.rmtree, _TMP_DIR, ignore_errors=True)
 
 
 def _download_tg_file(file_id: str, filename: str) -> Path:

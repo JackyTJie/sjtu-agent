@@ -33,11 +33,13 @@ wechat_bot.py — 通过微信 ilink AI Bot 平台将 agent.py 接入微信
 import argparse
 import base64
 import io
+import atexit
 import json
 import logging
 import os
 import random
 import re
+import shutil
 import sys
 import threading
 import time
@@ -64,6 +66,7 @@ ILINK_BASE = "https://ilinkai.weixin.qq.com"
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mKABCDEFGHJKST]')
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_wechat_"))
+atexit.register(shutil.rmtree, _TMP_DIR, ignore_errors=True)
 
 
 # ── ilink HTTP 客户端 ──────────────────────────────────────────────────────────

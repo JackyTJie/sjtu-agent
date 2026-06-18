@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import base64
 import io
 import json
 import re
+import shutil
 import sys
 import threading
 import time
@@ -47,6 +49,7 @@ from botpy.message import Message, DirectMessage
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mKABCDEFGHJKST]")
 _MENTION_RE = re.compile(r"<@!?\d+>")
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_qq_"))
+atexit.register(shutil.rmtree, _TMP_DIR, ignore_errors=True)
 _AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".amr", ".silk", ".aac"}
 
 
