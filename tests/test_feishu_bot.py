@@ -10,6 +10,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from sjtu_agent.paths import DATA_DIR
+
 
 # ── _extract_text ────────────────────────────────────────────────────────────
 
@@ -186,13 +188,14 @@ def test_build_date_ctx_format(monkeypatch):
 
 def test_new_conv_dict_structure(monkeypatch):
     """_new_conv_dict creates the expected conversation dict shape."""
-    import scripts.feishu_bot as fb
     import agent
+    from sjtu_agent.feishu.conversations import FeishuConversationManager
     # Mock agent config so _make_client does not fail
     monkeypatch.setattr(agent, "load_agent_config", lambda: {"model": "deepseek-chat", "api_key": None})
     monkeypatch.setattr(agent, "_make_client", lambda cfg: None)
 
-    conv = fb._new_conv_dict("测试")
+    mgr = FeishuConversationManager(DATA_DIR)
+    conv = mgr._new_conv_dict("测试")
     assert conv["name"] == "测试"
     assert conv["messages"] == []
     assert "model_box" in conv
@@ -202,25 +205,33 @@ def test_new_conv_dict_structure(monkeypatch):
 
 # ── _handle_commands — basic command routing ────────────────────────────────
 
+def _setup_conv_mgr():
+    """Set up a blank FeishuConversationManager for command testing."""
+    from scripts.feishu_bot import _conv_mgr
+    _conv_mgr.sessions.clear()
+    _conv_mgr.locks.clear()
+    return _conv_mgr
+
+
 def test_handle_commands_help():
-    from scripts.feishu_bot import _handle_commands, _sessions
-    _sessions.clear()
+    from scripts.feishu_bot import _handle_commands
+    _setup_conv_mgr()
     result = _handle_commands("test-open-id", "/help")
     assert result is not None
     assert "命令帮助" in result or "/help" in result
 
 
 def test_handle_commands_list_empty():
-    from scripts.feishu_bot import _handle_commands, _sessions
-    _sessions.clear()
+    from scripts.feishu_bot import _handle_commands
+    _setup_conv_mgr()
     result = _handle_commands("test-open-id", "/list")
     assert result is not None
     assert "对话" in result
 
 
 def test_handle_commands_new_and_switch():
-    from scripts.feishu_bot import _handle_commands, _sessions
-    _sessions.clear()
+    from scripts.feishu_bot import _handle_commands
+    _setup_conv_mgr()
     r1 = _handle_commands("test-open-id", "/new 学习")
     assert "OK" in r1
     r2 = _handle_commands("test-open-id", "/list")
@@ -234,15 +245,15 @@ def test_handle_commands_not_a_command():
 
 
 def test_handle_commands_unknown():
-    from scripts.feishu_bot import _handle_commands, _sessions
-    _sessions.clear()
+    from scripts.feishu_bot import _handle_commands
+    _setup_conv_mgr()
     result = _handle_commands("test-open-id", "/unknown_cmd")
     assert "未知命令" in result
 
 
 def test_handle_commands_name_rename():
-    from scripts.feishu_bot import _handle_commands, _sessions
-    _sessions.clear()
+    from scripts.feishu_bot import _handle_commands
+    _setup_conv_mgr()
     _handle_commands("test-open-id", "/new 原名称")
     r = _handle_commands("test-open-id", "/name 1 新名称")
     assert "新名称" in r
@@ -250,8 +261,8 @@ def test_handle_commands_name_rename():
 
 
 def test_handle_commands_delete():
-    from scripts.feishu_bot import _handle_commands, _sessions
-    _sessions.clear()
+    from scripts.feishu_bot import _handle_commands
+    _setup_conv_mgr()
     _handle_commands("test-open-id", "/new 测试1")
     _handle_commands("test-open-id", "/new 测试2")
     r = _handle_commands("test-open-id", "/delete 1")
