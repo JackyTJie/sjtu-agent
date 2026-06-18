@@ -638,7 +638,7 @@ def _fetch_eat_recommendation(campus: str = "闵行") -> str:
         for reason in r.get("reasons", []):
             lines.append(f"- {reason}")
         if r.get("recommended_sub_areas"):
-            areas = "、".join(a["name"] for a in r["recommended_sub_areas"][:3])
+            areas = "、".join(r["recommended_sub_areas"][:3])
             lines.append(f"- 推荐窗口：{areas}")
         lines.append("")
 
