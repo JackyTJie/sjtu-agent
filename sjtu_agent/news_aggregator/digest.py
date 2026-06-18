@@ -117,6 +117,7 @@ class DigestBuilder:
         lines.append("---")
         lines.append("")
         lines.append("_推送越用越准，多和我聊天我会更懂你。_")
+        lines.append("_回复 `/news_block <分类>` 屏蔽某类，`/news_reset` 重置画像。_")
 
         return "\n".join(lines)
 
@@ -183,6 +184,7 @@ class DigestBuilder:
                 lines.append(f"   🔗 <a href='{item.url}'>阅读原文</a>")
             lines.append("")
 
+        lines.append("<i>回复 /news_block &lt;分类&gt; 屏蔽某类，/news_reset 重置画像。</i>")
         return "\n".join(lines)
 
     def build_feishu_post(
@@ -232,15 +234,14 @@ class DigestBuilder:
                 age = _age_str(item)
                 score_pct = f"{int(score * 100)}%"
 
-                title_el = {"tag": "text", "text": f"{i}. {emoji} {item.title}（{score_pct}）"}
-                subtitle_el = {"tag": "text", "text": f"   📍 {src_name} · {age}"}
+                title_text = f"{i}. {emoji} {item.title}"
+                subtitle_el = {"tag": "text", "text": f"   📍 {src_name} · {age}（推荐度 {score_pct}）"}
 
                 if item.url:
-                    paras.append([title_el])
-                    paras.append([subtitle_el, {"tag": "a", "text": "🔗 阅读原文", "href": item.url}])
+                    paras.append([{"tag": "a", "text": title_text, "href": item.url}])
                 else:
-                    paras.append([title_el])
-                    paras.append([subtitle_el])
+                    paras.append([{"tag": "text", "text": title_text}])
+                paras.append([subtitle_el])
 
                 if reason and score >= 0.8:
                     paras.append([{"tag": "text", "text": f"   💬 {reason}"}])
@@ -254,5 +255,6 @@ class DigestBuilder:
 
         paras.append([{"tag": "text", "text": ""}])
         paras.append([{"tag": "text", "text": "推送越用越准，多和我聊天我会更懂你。"}])
+        paras.append([{"tag": "text", "text": "回复 /news_block <分类> 屏蔽某类，/news_reset 重置画像。"}])
 
         return paras

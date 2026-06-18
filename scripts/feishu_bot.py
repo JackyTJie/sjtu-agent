@@ -1085,6 +1085,17 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 return run_homework_check(list_only=True)
         if cmd == "/aihot":
             return "[aihot] 正在获取 AI 资讯…\n\n" + _fetch_aihot_news()
+        if cmd == "/news_block":
+            from sjtu_agent.news_aggregator.profile import UserProfile
+            category = parts[1].strip() if len(parts) > 1 else ""
+            if not category:
+                return "[news] 请指定要屏蔽的分类，如 `/news_block 教务处`。可用分类：教务处、水源社区、交大新闻网、Canvas"
+            UserProfile().block_category(category)
+            return f"[news] 已屏蔽「{category}」类新闻，后续摘要将不再推送此类内容。用 `/news_reset` 可重置。"
+        if cmd == "/news_reset":
+            from sjtu_agent.news_aggregator.profile import UserProfile
+            UserProfile().reset()
+            return "[news] 已重置新闻画像，下次摘要将恢复默认推荐。"
         if cmd == "/template":
             sub = parts[1].strip() if len(parts) > 1 else ""
             action = sub.split()[0] if sub else ""
