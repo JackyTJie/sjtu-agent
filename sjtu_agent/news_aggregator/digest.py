@@ -10,6 +10,21 @@ if TYPE_CHECKING:
 
 CST = timezone(timedelta(hours=8))
 
+
+def _report_label() -> str:
+    """根据当前小时返回对应报别。"""
+    h = datetime.now(CST).hour
+    if 6 <= h < 11:
+        return "早报"
+    if 11 <= h < 14:
+        return "午报"
+    if 14 <= h < 18:
+        return "日报"
+    if 18 <= h < 23:
+        return "晚报"
+    return "简报"
+
+
 _SOURCE_EMOJI = {
     "jwc":      "🏫",
     "shuiyuan": "💬",
@@ -49,12 +64,13 @@ class DigestBuilder:
         profile: "UserProfile",
     ) -> str:
         now = datetime.now(CST)
+        label = _report_label()
         weekday = "一二三四五六日"[now.weekday()]
         date_str = now.strftime(f"%Y-%m-%d 周{weekday}")
 
         if not ranked:
             return (
-                f"📰 **SJTU 早报 · {date_str}**\n\n"
+                f"📰 **SJTU {label} · {date_str}**\n\n"
                 "今天没有特别值得关注的新内容，继续加油！"
             )
 
@@ -64,7 +80,7 @@ class DigestBuilder:
         tags_str = "、".join(f"「{t}」" for t, _ in top_tags) if top_tags else "校园动态"
 
         lines = [
-            f"📰 **SJTU 早报 · {date_str}**",
+            f"📰 **SJTU {label} · {date_str}**",
             "",
             f"💡 为你精选 **{len(ranked)} 条**（基于 {tags_str}）",
             "",
@@ -135,11 +151,12 @@ class DigestBuilder:
     ) -> str:
         """生成 Telegram HTML 格式（用于 bot 推送）。"""
         now = datetime.now(CST)
+        label = _report_label()
         weekday = "一二三四五六日"[now.weekday()]
         date_str = now.strftime(f"%Y-%m-%d 周{weekday}")
 
         if not ranked:
-            return f"📰 <b>SJTU 早报 · {date_str}</b>\n\n今天没有特别值得关注的新内容。"
+            return f"📰 <b>SJTU {label} · {date_str}</b>\n\n今天没有特别值得关注的新内容。"
 
         profile_data = profile.load()
         interests = profile_data.get("interests", {})
@@ -147,7 +164,7 @@ class DigestBuilder:
         tags_str = "、".join(f"「{t}」" for t, _ in top_tags) if top_tags else "校园动态"
 
         lines = [
-            f"📰 <b>SJTU 早报 · {date_str}</b>",
+            f"📰 <b>SJTU {label} · {date_str}</b>",
             "",
             f"💡 为你精选 <b>{len(ranked)} 条</b>（基于 {tags_str}）",
             "",
@@ -183,13 +200,14 @@ class DigestBuilder:
              {tag:"a", text:"阅读原文", href:url}]
         """
         now = datetime.now(CST)
+        label = _report_label()
         weekday = "一二三四五六日"[now.weekday()]
         date_str = now.strftime(f"%Y-%m-%d 周{weekday}")
 
         paras: list[list[dict]] = []
 
         # 标题
-        paras.append([{"tag": "text", "text": f"📰 SJTU 早报 · {date_str}"}])
+        paras.append([{"tag": "text", "text": f"📰 SJTU {label} · {date_str}"}])
 
         if not ranked:
             paras.append([{"tag": "text", "text": "今天没有特别值得关注的新内容，继续加油！"}])
