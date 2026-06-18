@@ -1167,11 +1167,7 @@ def _process_news_command(sender_open_id: str, message_id: str) -> None:
     """后台执行 /news 命令（网络 I/O + LLM 排序）。"""
     try:
         digest = _fetch_news_digest()
-        # 直接通过 _send_to_chat 推送 Markdown 摘要
-        from sjtu_agent.paths import read_json_safe, CONFIG_PATH
-        cfg = read_json_safe(CONFIG_PATH, default={})
-        chat_id = cfg.get("feishu_open_id", sender_open_id)
-        _send_to_chat(chat_id, f"📰 校园新闻摘要\n\n{digest}")
+        _reply_text(message_id, f"📰 校园新闻摘要\n\n{digest}")
     except Exception as e:
         import traceback
         traceback.print_exc()
