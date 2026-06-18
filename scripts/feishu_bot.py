@@ -749,11 +749,16 @@ def _handle_commands(open_id: str, text: str) -> str | None:
         UserProfile().reset()
         return "[news] 已重置新闻画像，下次摘要将恢复默认推荐。"
     if cmd == "/eat":
-        campus = parts[1].strip() if len(parts) > 1 else "闵行"
-        valid = {"闵行", "徐汇", "张江"}
-        if campus not in valid:
-            return f"[eat] 未知校区「{campus}」，可选：{' / '.join(valid)}"
-        return "[eat] 正在查询食堂拥挤度…\n\n" + _fetch_eat_recommendation(campus)
+        try:
+            campus = parts[1].strip() if len(parts) > 1 else "闵行"
+            valid = {"闵行", "徐汇", "张江"}
+            if campus not in valid:
+                return f"[eat] 未知校区「{campus}」，可选：{' / '.join(valid)}"
+            return "[eat] 正在查询食堂拥挤度…\n\n" + _fetch_eat_recommendation(campus)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"[eat] 查询失败：{e}"
     if cmd == "/template":
         sub = parts[1].strip() if len(parts) > 1 else ""
         action = sub.split()[0] if sub else ""
