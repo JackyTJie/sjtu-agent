@@ -36,6 +36,10 @@ TOOLS_ENTRIES = [
                             "  sleep_pattern: str — 作息（如 late_night/normal/early）\n"
                             "  last_active: str — 最后活跃时间（ISO 格式，自动填当前时间）\n"
                             "  care_notes: list[str] — 需要定期关怀提示（如 '明天考物理'）\n"
+                            "  preferred_canteens: list[str] — 偏好的食堂（如 ['第三餐饮大楼', '玉兰苑']）\n"
+                            "  preferred_cuisines: list[str] — 偏好的菜系（如 ['米线', '西餐', '面食', '减脂餐']）\n"
+                            "  dietary_restrictions: list[str] — 饮食限制（如 ['清真', '素食']）\n"
+                            "  crowd_tolerance: str — 拥挤容忍度（低/中/高）\n"
                             "  custom: dict — 其他自定义字段"
                         ),
                         "additionalProperties": True,

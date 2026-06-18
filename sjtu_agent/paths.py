@@ -55,6 +55,8 @@ CARE_STATE_PATH       = DATA_DIR / "care_state.json"
 NEWS_HISTORY_PATH     = DATA_DIR / "news_history.json"
 CONVERSATION_LOG_PATH = DATA_DIR / "conversation_log.jsonl"
 WEB_TOKEN_PATH        = DATA_DIR / ".web_token"
+DINING_HISTORY_PATH   = DATA_DIR / "dining_history.json"
+CANTEEN_KNOWLEDGE_PATH = PACKAGE_ROOT / "data" / "canteen_knowledge.json"
 
 
 def _get_or_create_web_token() -> str:
@@ -178,6 +180,8 @@ def describe_runtime_paths() -> dict[str, str]:
         "canvas_downloads_dir": str(CANVAS_DOWNLOADS_DIR),
         "mysjtu_catalog_path": str(MYSJTU_CATALOG_PATH),
         "schedule_cache_path": str(SCHEDULE_CACHE_PATH),
+        "dining_history_path": str(DINING_HISTORY_PATH),
+        "canteen_knowledge_path": str(CANTEEN_KNOWLEDGE_PATH),
     }
 
 
