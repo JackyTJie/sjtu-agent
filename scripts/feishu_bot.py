@@ -244,7 +244,8 @@ _SEEN_CONTENT: dict[str, tuple[str, float]] = {}
 _SEEN_CONTENT_LOCK = threading.Lock()
 _CONTENT_DEDUP_SEC = 5
 import atexit, shutil
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_feishu_"))
+_TMP_DIR = DATA_DIR / "feishu_media"
+_TMP_DIR.mkdir(parents=True, exist_ok=True)
 atexit.register(lambda: shutil.rmtree(str(_TMP_DIR), ignore_errors=True))
 
 
