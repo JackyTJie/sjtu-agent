@@ -117,7 +117,6 @@ class DigestBuilder:
         lines.append("---")
         lines.append("")
         lines.append("_推送越用越准，多和我聊天我会更懂你。_")
-        lines.append("_回复 `/news_block <分类>` 屏蔽某类，`/news_reset` 重置画像。_")
 
         return "\n".join(lines)
 
@@ -184,7 +183,6 @@ class DigestBuilder:
                 lines.append(f"   🔗 <a href='{item.url}'>阅读原文</a>")
             lines.append("")
 
-        lines.append("<i>回复 /news_block &lt;分类&gt; 屏蔽某类</i>")
         return "\n".join(lines)
 
     def build_feishu_post(
@@ -256,6 +254,5 @@ class DigestBuilder:
 
         paras.append([{"tag": "text", "text": ""}])
         paras.append([{"tag": "text", "text": "推送越用越准，多和我聊天我会更懂你。"}])
-        paras.append([{"tag": "text", "text": "回复 /news_block 屏蔽某类，/news_reset 重置画像。"}])
 
         return paras

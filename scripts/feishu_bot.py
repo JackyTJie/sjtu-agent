@@ -488,7 +488,7 @@ _FS_MSG_MAX = 4000  # 飞书单条消息长度上限约 5000，留点余量
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _MD_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)|(?<!_)_([^_\n]+?)_(?!_)")
 _MD_CODE_RE = re.compile(r"`([^`\n]+?)`")
 _MD_TABLE_SEP_RE = re.compile(r"^\|?\s*[-:]{3,}\s*\|\s*[-:]{3,}\s*(\|\s*[-:]{3,}\s*)*\|?\s*$")
 
@@ -673,7 +673,8 @@ def _parse_inline(text: str) -> _PostParagraph:
             elements.append(_el_text(first_match.group(1), ["bold"]))
             remaining = remaining[first_match.end():]
         elif first_type == "italic":
-            elements.append(_el_text(first_match.group(1), ["italic"]))
+            txt = first_match.group(1) or first_match.group(2)
+            elements.append(_el_text(txt, ["italic"]))
             remaining = remaining[first_match.end():]
         elif first_type == "code":
             elements.append(_el_text(first_match.group(1)))
