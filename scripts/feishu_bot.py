@@ -46,6 +46,12 @@ from lark_oapi.api.im.v1 import (
 
 import agent
 
+from sjtu_agent.feishu.rendering import (
+    FS_MSG_MAX, build_post_content, has_table, render_table_visual,
+    build_card_content,
+)
+from sjtu_agent.feishu.conversations import FeishuConversationManager
+
 
 def _load_cfg() -> dict:
     try:
@@ -76,11 +82,6 @@ _api_client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build(
 # ── 后台线程池（LLM 推理在后台线程执行，避免阻塞 WS event loop） ─────────
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="feishu")
 
-# ── 多对话会话（每个 open_id 可拥有多个独立对话） ────────────────────────
-_sessions: dict[str, dict] = {}
-_locks: dict[str, threading.Lock] = {}
-_sess_meta_lock = threading.RLock()  # reentrant: _handle_commands calls _save_sessions inside lock
-
 # ── 作业解答上下文（记住最近一次 /hw do，供"给我答案"使用）────────────────
 _hw_context: dict[str, dict] = {}
 _hw_ctx_lock = threading.Lock()
@@ -93,101 +94,9 @@ _COOLDOWN_SEC = 10
 
 # ── 会话持久化 ──────────────────────────────────────────────────────────────
 from sjtu_agent.paths import DATA_DIR
-_SESSIONS_FILE = DATA_DIR / "feishu_sessions.json"
-_SAVE_LOCK = threading.Lock()
-_MAX_SESSION_AGE_DAYS = 30
 
-
-def _load_sessions() -> None:
-    """从磁盘恢复会话状态。"""
-    if not _SESSIONS_FILE.exists():
-        return
-    try:
-        with _SAVE_LOCK:
-            data = json.loads(_SESSIONS_FILE.read_text(encoding="utf-8"))
-        cutoff = _dt.datetime.now().timestamp() - _MAX_SESSION_AGE_DAYS * 86400
-        with _sess_meta_lock:
-            for open_id, meta in data.items():
-                convs = []
-                for c in meta.get("conversations", []):
-                    if c.get("saved_at", 0) < cutoff:
-                        continue
-                    agent_cfg = agent.load_agent_config()
-                    c["model_box"] = [agent_cfg.get("model", "deepseek-chat")]
-                    c["client_box"] = [agent._make_client(agent_cfg) if agent_cfg else None]
-                    convs.append(c)
-                if convs:
-                    _sessions[open_id] = {
-                        "conversations": convs,
-                        "current_idx": min(meta.get("current_idx", 0), len(convs) - 1),
-                        "next_name_id": meta.get("next_name_id", len(convs) + 1),
-                    }
-                    _locks[open_id] = threading.Lock()
-        if _sessions:
-            total = sum(len(m["conversations"]) for m in _sessions.values())
-            print(f"[feishu] 已恢复 {len(_sessions)} 个用户的 {total} 个对话")
-    except Exception as e:
-        print(f"[feishu] 会话恢复失败: {e}")
-
-
-def _save_sessions() -> None:
-    """将当前会话状态保存到磁盘（只保存可序列化字段）。"""
-    try:
-        _SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        now_ts = _dt.datetime.now().timestamp()
-        with _sess_meta_lock:
-            data = {}
-            for open_id, meta in _sessions.items():
-                data[open_id] = {
-                    "current_idx": meta["current_idx"],
-                    "next_name_id": meta["next_name_id"],
-                    "conversations": [{
-                        "name": c["name"],
-                        "messages": c["messages"][-200:],  # 只保留最近 200 条
-                        "created_at": c["created_at"],
-                        "saved_at": now_ts,
-                    } for c in meta["conversations"]],
-                }
-        with _SAVE_LOCK:
-            _SESSIONS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        print(f"[feishu] 会话保存失败: {e}")
-
-
-# 启动时恢复会话
-_load_sessions()
-
-
-
-def _new_conv_dict(name: str) -> dict:
-    agent_cfg = agent.load_agent_config()
-    return {
-        "name": name,
-        "messages": [],
-        "model_box": [agent_cfg.get("model", "deepseek-chat")],
-        "client_box": [agent._make_client(agent_cfg) if agent_cfg.get("api_key") else None],
-        "created_at": _dt.datetime.now().strftime("%m-%d %H:%M"),
-    }
-
-
-def _ensure_user(open_id: str) -> None:
-    with _sess_meta_lock:
-        if open_id not in _sessions:
-            _sessions[open_id] = {
-                "conversations": [_new_conv_dict("默认")],
-                "current_idx": 0,
-                "next_name_id": 1,
-            }
-            _locks[open_id] = threading.Lock()
-
-
-def _get_active_conv(open_id: str) -> tuple[dict, dict, threading.Lock]:
-    _ensure_user(open_id)
-    with _sess_meta_lock:
-        meta = _sessions[open_id]
-        idx = meta["current_idx"]
-        conv = meta["conversations"][idx]
-        return conv, meta, _locks[open_id]
+_conv_mgr = FeishuConversationManager(DATA_DIR)
+_conv_mgr.load()
 
 
 _FS_CTX = (
@@ -481,242 +390,6 @@ def _extract_media_ref(msg_type: str, content_json: str) -> dict | None:
     return None
 
 
-# ── Markdown → 飞书 post / interactive 转换 ───────────────────────────────────
-
-_FS_MSG_MAX = 4000  # 飞书单条消息长度上限约 5000，留点余量
-
-_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-_MD_BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")
-_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)|(?<!_)_([^_\n]+?)_(?!_)")
-_MD_CODE_RE = re.compile(r"`([^`\n]+?)`")
-_MD_TABLE_SEP_RE = re.compile(r"^\|?\s*[-:]{3,}\s*\|\s*[-:]{3,}\s*(\|\s*[-:]{3,}\s*)*\|?\s*$")
-
-# 飞书 post 格式中的元素类型
-_PostElement = dict  # {"tag": "text"|"a", "text": str, ...}
-_PostParagraph = list  # list[_PostElement]
-_PostContent = list  # list[_PostParagraph]
-
-
-def _render_table_visual(md_text: str) -> str:
-    """Markdown table -> list format (Feishu proportional fonts break box-drawing)."""
-    NL = chr(10)
-    lines = [l for l in md_text.strip().split(NL)]
-    table_start = -1
-    for i, line in enumerate(lines):
-        if _MD_TABLE_SEP_RE.match(line.strip()):
-            table_start = i - 1
-            break
-    if table_start < 0:
-        return md_text
-    table_end = len(lines) - 1
-    for i in range(table_start + 2, len(lines)):
-        stripped = lines[i].strip()
-        if not (stripped.startswith(chr(124)) and chr(124) in stripped[1:]):
-            table_end = i - 1
-            break
-
-    def parse_row(row):
-        return [c.strip() for c in row.strip().strip(chr(124)).split(chr(124))]
-
-    header = parse_row(lines[table_start])
-    data_rows = []
-    for i in range(table_start + 2, table_end + 1):
-        if lines[i].strip():
-            data_rows.append(parse_row(lines[i]))
-    if not header or not data_rows:
-        return md_text
-
-    items = []
-    for row in data_rows:
-        title = row[0] if row else ""
-        lines_item = [title]
-        for j in range(1, min(len(header), len(row))):
-            if row[j]:
-                lines_item.append("  " + str(header[j]) + chr(65306) + str(row[j]))
-        items.append(NL.join(lines_item))
-    visual = (NL + NL).join(items)
-    before = NL.join(lines[:table_start])
-    after = NL.join(lines[table_end + 1:]) if table_end + 1 < len(lines) else ""
-    result = (before + NL if before else "") + visual
-    if after:
-        result += NL + after
-    return result
-
-def _has_table(md_text: str) -> bool:
-    """检测 Markdown 文本是否包含表格。"""
-    lines = md_text.strip().split("\n")
-    for i, line in enumerate(lines):
-        if i > 0 and _MD_TABLE_SEP_RE.match(line.strip()):
-            return True
-    return False
-
-
-def _build_post_content(md_text: str) -> _PostContent:
-    """将 Markdown 文本转换为飞书 post 格式的 content 二维数组。"""
-    paragraphs: _PostContent = []
-    lines = md_text.strip().split("\n")
-    in_code_block = False
-    code_buf: list[str] = []
-
-    def _flush_code_block():
-        nonlocal code_buf
-        if code_buf:
-            # 代码块整体作为一个段落，用 │ 前缀标记
-            code_text = "\n".join(code_buf)
-            paragraphs.append([_el_text(code_text)])
-            code_buf = []
-
-    for line in lines:
-        stripped = line.strip()
-        # Code block: triple backtick fence
-        if stripped.startswith("```"):
-            if in_code_block:
-                _flush_code_block()
-                in_code_block = False
-            else:
-                in_code_block = True
-                code_buf = []
-            continue
-        if in_code_block:
-            code_buf.append(line)
-            continue
-        if not stripped:
-            paragraphs.append([])
-            continue
-
-        # 标题 → 去掉 # 前缀，内联解析后整体加粗
-        header_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
-        if header_match:
-            text = header_match.group(2)
-            h_elements = _parse_inline(text)
-            for el in h_elements:
-                if el.get("tag") == "text":
-                    el["style"] = (el.get("style") or []) + ["bold"]
-            paragraphs.append(h_elements)
-            continue
-
-        # 无序列表 → 去掉前缀，内联解析
-        list_match = re.match(r"^[-*]\s+(.+)$", stripped)
-        if list_match:
-            li_elements = _parse_inline(list_match.group(1))
-            paragraphs.append([_el_text("• ")] + li_elements)
-            continue
-
-        # 有序列表 → 提取序号和内容，内联解析
-        ol_match = re.match(r"^(\d+\.)\s+(.+)$", stripped)
-        if ol_match:
-            prefix = ol_match.group(1) + " "
-            ol_elements = _parse_inline(ol_match.group(2))
-            paragraphs.append([_el_text(prefix)] + ol_elements)
-            continue
-
-        # 引用块
-        if stripped.startswith(">"):
-            text = stripped.lstrip("> ").lstrip(">")
-            paragraphs.append([_el_text(text)])
-            continue
-
-        # 分隔线
-        if stripped in ("---", "***", "___"):
-            paragraphs.append([_el_text("—" * 20)])
-            continue
-
-        # 普通段落 → 解析内联样式
-        elements = _parse_inline(stripped)
-        paragraphs.append(elements)
-
-    _flush_code_block()  # 处理未闭合的代码块
-    return paragraphs
-
-
-def _parse_inline(text: str) -> _PostParagraph:
-    """解析一行中的内联 Markdown 为 post 元素列表。"""
-    elements: _PostParagraph = []
-    pos = 0
-    remaining = text
-
-    while remaining:
-        # 找最早的标记（bold+italic 优先于 bold 和 italic）
-        bold_italic_m = _MD_BOLD_ITALIC_RE.search(remaining)
-        bold_m = _MD_BOLD_RE.search(remaining)
-        italic_m = _MD_ITALIC_RE.search(remaining)
-        code_m = _MD_CODE_RE.search(remaining)
-        link_m = _MD_LINK_RE.search(remaining)
-
-        candidates = []
-        if bold_italic_m: candidates.append((bold_italic_m.start(), bold_italic_m, "bold_italic"))
-        if bold_m: candidates.append((bold_m.start(), bold_m, "bold"))
-        if italic_m: candidates.append((italic_m.start(), italic_m, "italic"))
-        if code_m: candidates.append((code_m.start(), code_m, "code"))
-        if link_m: candidates.append((link_m.start(), link_m, "link"))
-
-        if not candidates:
-            txt = _unescape_md(remaining)
-            if txt:
-                elements.append(_el_text(txt))
-            break
-
-        candidates.sort(key=lambda x: x[0])
-        first_start, first_match, first_type = candidates[0]
-
-        # 标记前的纯文本
-        if first_start > 0:
-            prefix = _unescape_md(remaining[:first_start])
-            if prefix:
-                elements.append(_el_text(prefix))
-
-        if first_type == "bold_italic":
-            elements.append(_el_text(first_match.group(1), ["bold", "italic"]))
-            remaining = remaining[first_match.end():]
-        elif first_type == "bold":
-            elements.append(_el_text(first_match.group(1), ["bold"]))
-            remaining = remaining[first_match.end():]
-        elif first_type == "italic":
-            txt = first_match.group(1) or first_match.group(2)
-            elements.append(_el_text(txt, ["italic"]))
-            remaining = remaining[first_match.end():]
-        elif first_type == "code":
-            elements.append(_el_text(first_match.group(1)))
-            remaining = remaining[first_match.end():]
-        elif first_type == "link":
-            elements.append(_el_link(first_match.group(1), first_match.group(2)))
-            remaining = remaining[first_match.end():]
-
-    # 合并相邻同风格 text 元素
-    merged: _PostParagraph = []
-    for el in elements:
-        if (merged and el.get("tag") == "text" and merged[-1].get("tag") == "text"
-                and el.get("style") == merged[-1].get("style")
-                and "href" not in el):
-            merged[-1]["text"] += el["text"]
-        else:
-            merged.append(el)
-    return merged
-
-
-def _el_text(text: str, style: list | None = None) -> _PostElement:
-    el: _PostElement = {"tag": "text", "text": text}
-    if style:
-        el["style"] = style
-    return el
-
-
-def _el_link(text: str, href: str) -> _PostElement:
-    return {"tag": "a", "text": text, "href": href}
-
-
-def _unescape_md(text: str) -> str:
-    """去掉反斜杠转义。"""
-    return text.replace("\\*", "*").replace("\\`", "`").replace("\\[", "[")
-
-
-def _build_card_content(md_text: str) -> str:
-    """构建交互式卡片的 markdown 内容（用于含表格的消息）。"""
-    # 卡片 markdown 元素原生支持 Markdown 语法
-    return md_text[:30000]  # 飞书卡片 markdown 有长度限制
-
-
 # ── 回复消息 ──────────────────────────────────────────────────────────────────
 
 
@@ -730,11 +403,11 @@ def _reply_text(message_id: str, text: str) -> None:
         return
 
     # 含表格 → 转为可视化排版（飞书 card markdown 元素不支持 GFM 表格）
-    if _has_table(text):
-        text = _render_table_visual(text)
+    if has_table(text):
+        text = render_table_visual(text)
 
     # 普通内容 → post 格式
-    post_content = _build_post_content(text)
+    post_content = build_post_content(text)
     if not post_content:
         _reply_raw_text(message_id, text)
         return
@@ -769,7 +442,7 @@ def _reply_card(message_id: str, text: str) -> None:
     """用 interactive 卡片回复（含 markdown 元素，支持表格）。"""
     card = {
         "config": {"wide_screen_mode": True},
-        "elements": [{"tag": "markdown", "content": _build_card_content(text)}],
+        "elements": [{"tag": "markdown", "content": build_card_content(text)}],
     }
     req = (
         ReplyMessageRequest.builder()
@@ -793,7 +466,7 @@ def _reply_card(message_id: str, text: str) -> None:
 
 def _reply_raw_text(message_id: str, text: str) -> None:
     """纯文本降级回复。"""
-    chunks = [text[i:i + _FS_MSG_MAX] for i in range(0, len(text), _FS_MSG_MAX)] or [text]
+    chunks = [text[i:i + FS_MSG_MAX] for i in range(0, len(text), FS_MSG_MAX)] or [text]
     for chunk in chunks:
         req = (
             ReplyMessageRequest.builder()
@@ -818,10 +491,10 @@ def _send_to_chat(chat_id: str, text: str) -> None:
         return
 
     # 含表格 → interactive 卡片
-    if _has_table(text):
+    if has_table(text):
         card = {
             "config": {"wide_screen_mode": True},
-            "elements": [{"tag": "markdown", "content": _build_card_content(text)}],
+            "elements": [{"tag": "markdown", "content": build_card_content(text)}],
         }
         req = (
             CreateMessageRequest.builder()
@@ -841,7 +514,7 @@ def _send_to_chat(chat_id: str, text: str) -> None:
         return
 
     # 普通内容 → post
-    post_content = _build_post_content(text)
+    post_content = build_post_content(text)
     if post_content:
         content = {"zh_cn": {"title": "", "content": post_content}}
         req = (
@@ -958,79 +631,12 @@ def _handle_commands(open_id: str, text: str) -> str | None:
         return None
     parts = text.strip().split(maxsplit=2)
     cmd = parts[0].lower() if parts else ""
-    _ensure_user(open_id)
-    with _sess_meta_lock:
-        meta = _sessions[open_id]
-        convs = meta["conversations"]
-        n = len(convs)
-        if cmd == "/list":
-            lines = [f"共 {n} 个对话："]
-            for i, c in enumerate(convs):
-                marker = " ← 当前" if i == meta["current_idx"] else ""
-                msg_count = len([m for m in c["messages"] if m.get("role") == "user"])
-                lines.append(f"  [{i+1}] {c['name']}（{msg_count} 条消息, {c['created_at']}）{marker}")
-            return "\n".join(lines)
-        if cmd == "/new":
-            name = parts[1].strip() if len(parts) > 1 else f"对话 {meta['next_name_id']}"
-            meta["next_name_id"] += 1
-            convs.append(_new_conv_dict(name))
-            meta["current_idx"] = len(convs) - 1
-            _save_sessions()
-            return f"[OK] 已创建并切换到对话「{name}」（序号 {len(convs)}）"
-        if cmd == "/switch":
-            if len(parts) < 2:
-                return "用法：/switch <序号>，用 /list 查看序号"
-            try:
-                idx = int(parts[1]) - 1
-            except ValueError:
-                return f"无效序号：{parts[1]}"
-            if idx < 0 or idx >= n:
-                return f"无效序号，共 {n} 个对话（1~{n}）"
-            meta["current_idx"] = idx
-            _save_sessions()
-            return f"[OK] 已切换到对话「{convs[idx]['name']}」（序号 {idx + 1}）"
-        if cmd == "/name":
-            if len(parts) < 3:
-                return "用法：/name <序号> <新名称>"
-            try:
-                idx = int(parts[1]) - 1
-            except ValueError:
-                return f"无效序号：{parts[1]}"
-            if idx < 0 or idx >= n:
-                return f"无效序号，共 {n} 个对话（1~{n}）"
-            old_name = convs[idx]["name"]
-            convs[idx]["name"] = parts[2].strip()
-            _save_sessions()
-            return f"[OK] 已将对话 [{idx + 1}]「{old_name}」重命名为「{convs[idx]['name']}」"
-        if cmd == "/delete":
-            if len(parts) < 2:
-                return "用法：/delete <序号>"
-            try:
-                idx = int(parts[1]) - 1
-            except ValueError:
-                return f"无效序号：{parts[1]}"
-            if idx < 0 or idx >= n:
-                return f"无效序号，共 {n} 个对话（1~{n}）"
-            if n <= 1:
-                return "[X] 至少保留一个对话"
-            name = convs[idx]["name"]
-            del convs[idx]
-            if meta["current_idx"] >= len(convs):
-                meta["current_idx"] = len(convs) - 1
-            elif meta["current_idx"] > idx:
-                meta["current_idx"] -= 1
-            _save_sessions()
-            return f"[OK] 已删除对话「{name}」，当前对话：「{convs[meta['current_idx']]['name']}」"
-        if cmd == "/history":
-            conv = convs[meta["current_idx"]]
-            user_msgs = [m for m in conv["messages"] if m.get("role") == "user"]
-            if not user_msgs:
-                return f"对话「{conv['name']}」暂无消息记录。"
-            lines = [f"对话「{conv['name']}」最近 {min(len(user_msgs), 10)} 条消息："]
-            for i, m in enumerate(user_msgs[-10:]):
-                lines.append(f"  {i+1}. {m.get('content', '')[:60]}")
-            return "\n".join(lines)
-        if cmd == "/help":
+    # 多对话命令 → 委托 ConversationManager
+    conv_result = _conv_mgr.handle_command(open_id, cmd, parts)
+    if conv_result is not None:
+        return conv_result
+
+    if cmd == "/help":
             return (
                 "**飞书 Bot 命令帮助**\n\n"
                 "[对话]  `/new <名称>`  `/list`  `/switch <N>`  `/name <N> <名>`  `/delete <N>`  `/history`\n\n"
@@ -1042,120 +648,114 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "[记忆]  我会记住你聊过的课程、考试、学习偏好，下次对话自动关联\n\n"
                 "[系统]  `/help`"
             )
-        if cmd == "/hw":
-            sub = parts[1] if len(parts) > 1 else ""
-            from sjtu_agent.homework_agent import run_homework_check
-            if sub == "do":
-                if len(parts) < 3:
-                    return "用法：/hw do <序号>"
+    if cmd == "/hw":
+        sub = parts[1] if len(parts) > 1 else ""
+        from sjtu_agent.homework_agent import run_homework_check
+        if sub == "do":
+            if len(parts) < 3:
+                return "用法：/hw do <序号>"
+            try:
+                idx = int(parts[2])
+            except ValueError:
+                return f"无效序号：{parts[2]}"
+            return "[homework] 🧠 解题助手模式…\n\n" + run_homework_check(specific_idx=idx)
+        elif sub == "brief":
+            if len(parts) < 3:
+                return "用法：/hw brief <序号>"
+            try:
+                idx = int(parts[2])
+            except ValueError:
+                return f"无效序号：{parts[2]}"
+            return "[homework] 正在获取摘要…\n\n" + run_homework_check(specific_idx=idx, brief=True)
+        elif sub == "past":
+            rest = parts[2] if len(parts) > 2 else ""
+            rest_parts = rest.split(maxsplit=1)
+            if rest_parts and rest_parts[0] == "do":
                 try:
-                    idx = int(parts[2])
-                except ValueError:
-                    return f"无效序号：{parts[2]}"
-                return "[homework] 🧠 解题助手模式…\n\n" + run_homework_check(specific_idx=idx)
-            elif sub == "brief":
-                if len(parts) < 3:
-                    return "用法：/hw brief <序号>"
-                try:
-                    idx = int(parts[2])
-                except ValueError:
-                    return f"无效序号：{parts[2]}"
-                return "[homework] 正在获取摘要…\n\n" + run_homework_check(specific_idx=idx, brief=True)
-            elif sub == "past":
-                # /hw past [do <idx>]
-                rest = parts[2] if len(parts) > 2 else ""
-                rest_parts = rest.split(maxsplit=1)
-                if rest_parts and rest_parts[0] == "do":
-                    try:
-                        idx = int(rest_parts[1])
-                    except (ValueError, IndexError):
-                        return "用法：/hw past do <序号>"
-                    return "[homework] 正在分析历史作业…\n\n" + run_homework_check(specific_idx=idx, include_past=True)
-                return run_homework_check(list_only=True, include_past=True)
-            elif sub == "list":
-                return run_homework_check(list_only=True)
-            elif sub == "due":
-                days = int(parts[2]) if len(parts) > 2 else 3
-                return run_homework_check(due_within_days=days, list_only=True)
-            elif sub == "all":
-                return run_homework_check(due_within_days=3650, include_past=True, list_only=True)
-            elif sub == "answer":
-                return _do_hw_answer(open_id)
-            else:
-                return run_homework_check(list_only=True)
-        if cmd == "/aihot":
-            return "[aihot] 正在获取 AI 资讯…\n\n" + _fetch_aihot_news()
-        if cmd == "/news_block":
-            from sjtu_agent.news_aggregator.profile import UserProfile
-            category = parts[1].strip() if len(parts) > 1 else ""
-            if not category:
-                return "[news] 请指定要屏蔽的分类，如 `/news_block 教务处`。可用分类：教务处、水源社区、交大新闻网、Canvas"
-            UserProfile().block_category(category)
-            return f"[news] 已屏蔽「{category}」类新闻，后续摘要将不再推送此类内容。用 `/news_reset` 可重置。"
-        if cmd == "/news_reset":
-            from sjtu_agent.news_aggregator.profile import UserProfile
-            UserProfile().reset()
-            return "[news] 已重置新闻画像，下次摘要将恢复默认推荐。"
-        if cmd == "/template":
-            sub = parts[1].strip() if len(parts) > 1 else ""
-            action = sub.split()[0] if sub else ""
-            rest = " ".join(sub.split()[1:]) if sub and " " in sub else ""
+                    idx = int(rest_parts[1])
+                except (ValueError, IndexError):
+                    return "用法：/hw past do <序号>"
+                return "[homework] 正在分析历史作业…\n\n" + run_homework_check(specific_idx=idx, include_past=True)
+            return run_homework_check(list_only=True, include_past=True)
+        elif sub == "list":
+            return run_homework_check(list_only=True)
+        elif sub == "due":
+            days = int(parts[2]) if len(parts) > 2 else 3
+            return run_homework_check(due_within_days=days, list_only=True)
+        elif sub == "all":
+            return run_homework_check(due_within_days=3650, include_past=True, list_only=True)
+        elif sub == "answer":
+            return _do_hw_answer(open_id)
+        else:
+            return run_homework_check(list_only=True)
+    if cmd == "/aihot":
+        return "[aihot] 正在获取 AI 资讯…\n\n" + _fetch_aihot_news()
+    if cmd == "/news_block":
+        from sjtu_agent.news_aggregator.profile import UserProfile
+        category = parts[1].strip() if len(parts) > 1 else ""
+        if not category:
+            return "[news] 请指定要屏蔽的分类，如 `/news_block 教务处`。可用分类：教务处、水源社区、交大新闻网、Canvas"
+        UserProfile().block_category(category)
+        return f"[news] 已屏蔽「{category}」类新闻，后续摘要将不再推送此类内容。用 `/news_reset` 可重置。"
+    if cmd == "/news_reset":
+        from sjtu_agent.news_aggregator.profile import UserProfile
+        UserProfile().reset()
+        return "[news] 已重置新闻画像，下次摘要将恢复默认推荐。"
+    if cmd == "/template":
+        sub = parts[1].strip() if len(parts) > 1 else ""
+        action = sub.split()[0] if sub else ""
+        rest = " ".join(sub.split()[1:]) if sub and " " in sub else ""
 
-            from sjtu_agent.overleaf_client import (
-                list_local_templates, apply_template, clone_template_from_overleaf,
-                compile_latex, find_tex_file, push_to_overleaf,
-            )
+        from sjtu_agent.overleaf_client import (
+            list_local_templates, apply_template, clone_template_from_overleaf,
+            compile_latex, find_tex_file, push_to_overleaf,
+        )
 
-            # ── /template compile ──
-            if action == "compile":
-                from sjtu_agent.paths import PAPERS_DIR
-                tex = find_tex_file()
-                if not tex:
-                    return f"[xelatex] 在 {PAPERS_DIR} 下未找到 .tex 文件。请先用 /template <name> 套用模板，放入文档后编译。"
-                ok, output = compile_latex(tex)
-                if ok:
-                    pdf = tex.with_suffix(".pdf")
-                    return f"[xelatex] 编译成功 ✅\nPDF: {pdf.name} ({pdf.stat().st_size // 1024} KB)"
-                return f"[xelatex] 编译失败 ❌\n```\n{output}\n```"
+        if action == "compile":
+            from sjtu_agent.paths import PAPERS_DIR
+            tex = find_tex_file()
+            if not tex:
+                return f"[xelatex] 在 {PAPERS_DIR} 下未找到 .tex 文件。请先用 /template <name> 套用模板，放入文档后编译。"
+            ok, output = compile_latex(tex)
+            if ok:
+                pdf = tex.with_suffix(".pdf")
+                return f"[xelatex] 编译成功 ✅\nPDF: {pdf.name} ({pdf.stat().st_size // 1024} KB)"
+            return f"[xelatex] 编译失败 ❌\n```\n{output}\n```"
 
-            # ── /template clone <project-id> [name] ──
-            if action == "clone":
-                args = rest.split() if rest else []
-                if not args:
-                    return "用法: /template clone <project-id> [name]"
-                pid = args[0]
-                name = args[1] if len(args) > 1 else ""
-                path = clone_template_from_overleaf(pid, name)
-                if not path:
-                    return f"克隆失败: 请检查 project-id 是否正确，以及 Git 是否已配置。Overleaf Git Bridge URL: https://latex.sjtu.edu.cn/git/{pid}"
-                return f"模板已克隆到 `{path}`\n\n/template {Path(path).name} 即可套用。"
+        if action == "clone":
+            args = rest.split() if rest else []
+            if not args:
+                return "用法: /template clone <project-id> [name]"
+            pid = args[0]
+            name = args[1] if len(args) > 1 else ""
+            path = clone_template_from_overleaf(pid, name)
+            if not path:
+                return f"克隆失败: 请检查 project-id 是否正确，以及 Git 是否已配置。Overleaf Git Bridge URL: https://latex.sjtu.edu.cn/git/{pid}"
+            return f"模板已克隆到 `{path}`\n\n/template {Path(path).name} 即可套用。"
 
-            # ── /template push [name] ──
-            if action == "push":
-                from sjtu_agent.paths import PAPERS_DIR
-                target = PAPERS_DIR
-                msg = push_to_overleaf(target)
-                return f"[git] {msg[1]}"
+        if action == "push":
+            from sjtu_agent.paths import PAPERS_DIR
+            target = PAPERS_DIR
+            msg = push_to_overleaf(target)
+            return f"[git] {msg[1]}"
 
-            # ── /template list (default) ──
-            templates = list_local_templates()
-            if not templates:
-                return "暂无可用模板。用 /template clone <project-id> 从 Overleaf 克隆。"
-            if not sub:
-                lines = ["📄 **可用模板**："]
-                for t in templates:
-                    src = "📦 内置" if t["source"] == "builtin" else "📥 下载"
-                    lines.append(f"  [{t['name']}] {t['description']} {src}")
-                lines.append("\n子命令: /template <名称> | compile | clone <id> | push")
-                return "\n".join(lines)
+        templates = list_local_templates()
+        if not templates:
+            return "暂无可用模板。用 /template clone <project-id> 从 Overleaf 克隆。"
+        if not sub:
+            lines = ["📄 **可用模板**："]
+            for t in templates:
+                src = "📦 内置" if t["source"] == "builtin" else "📥 下载"
+                lines.append(f"  [{t['name']}] {t['description']} {src}")
+            lines.append("\n子命令: /template <名称> | compile | clone <id> | push")
+            return "\n".join(lines)
 
-            # ── /template <name> (apply) ──
-            match = next((t for t in templates if t["name"] == sub), None)
-            if not match:
-                return f"模板不存在: {sub}。用 /template 查看可用模板。"
-            msg = apply_template(sub)
-            return f"{msg}\n\n把你的文档文件放进去，然后 /template compile 编译。"
-        return f"未知命令：{cmd}。输入 /help 查看可用命令。"
+        match = next((t for t in templates if t["name"] == sub), None)
+        if not match:
+            return f"模板不存在: {sub}。用 /template 查看可用模板。"
+        msg = apply_template(sub)
+        return f"{msg}\n\n把你的文档文件放进去，然后 /template compile 编译。"
+    return f"未知命令：{cmd}。输入 /help 查看可用命令。"
 
 
 def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None:
@@ -1302,7 +902,7 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
     t = text.strip() if text else ""
     if any(kw in t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
         return
-    conv, meta, lock = _get_active_conv(sender_open_id)
+    conv, meta, lock = _conv_mgr.get_active(sender_open_id)
     if not lock.acquire(blocking=False):
         _reply_text(message_id, "上一条消息还在处理中，请稍候…")
         return
@@ -1317,7 +917,7 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
         _reply_text(message_id, f"出错了：{e}")
         return
     finally:
-        _save_sessions()
+        _conv_mgr.save()
         lock.release()
     _reply_text(message_id, reply)
     # 记忆提取不阻塞锁 — 在发送回复后异步进行
@@ -1328,7 +928,7 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
 
 
 def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str, content_json: str) -> None:
-    conv, meta, lock = _get_active_conv(sender_open_id)
+    conv, meta, lock = _conv_mgr.get_active(sender_open_id)
     if not lock.acquire(blocking=False):
         _reply_text(message_id, "上一条消息还在处理中，请稍候…")
         return
@@ -1391,7 +991,7 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
         print(f"[feishu] 媒体处理出错：{e}")
         _reply_text(message_id, f"附件处理失败：{e}")
     finally:
-        _save_sessions()
+        _conv_mgr.save()
         lock.release()
 
 
