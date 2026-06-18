@@ -757,8 +757,9 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             return "[eat] 正在查询食堂拥挤度…\n\n" + _fetch_eat_recommendation(campus)
         except Exception as e:
             import traceback
-            traceback.print_exc()
-            return f"[eat] 查询失败：{e}"
+            tb = traceback.format_exc()
+            print(tb)
+            return f"[eat] 查询失败：{e}\n```\n{tb[-500:]}\n```"
     if cmd == "/template":
         sub = parts[1].strip() if len(parts) > 1 else ""
         action = sub.split()[0] if sub else ""
