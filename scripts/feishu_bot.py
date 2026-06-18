@@ -127,6 +127,7 @@ _FS_CTX = (
     "- 从 Overleaf 克隆模板/推送到 Overleaf → /template clone <id>, /template push\n"
     "- AI 资讯/今天 AI 圈/大模型新闻 → /aihot\n"
     "- 校园新闻/今天有什么新闻/每日简报 → /news\n"
+    "- 食堂推荐/去哪吃/今天吃什么/食堂人多吗 → /eat [闵行|徐汇|张江]\n"
     "- 查看帮助/有什么功能/怎么用/命令列表 → /help\n"
     "\n"
     "## 主动引导\n"
@@ -135,6 +136,7 @@ _FS_CTX = (
     "📄 **LaTeX 模板**：/template 列出模板，/template bachelor-thesis 套用毕业论文格式\n"
     "🤖 **AI 资讯**：/aihot 获取今日 AI 圈精选新闻（支持追问最新进展、大模型发布等）\n"
     "📰 **校园新闻**：/news 生成校园新闻摘要（教务处+水源+交大新闻网+Canvas）\n"
+    "🍽️ **食堂推荐**：/eat 获取实时拥挤度 + 个性化食堂推荐，/eat 徐汇 切换校区\n"
     "📅 **学习信息**：查 DDL、看课表、查成绩、物理实验\n"
     "💬 **对话管理**：/new /list /switch /name /delete /history\n"
     "🔍 **校园搜索**：教务处通知、水源社区、选课社区评价\n"
@@ -603,6 +605,50 @@ def _fetch_news_digest(top_k: int = 8) -> str:
     return md_digest
 
 
+def _fetch_eat_recommendation(campus: str = "闵行") -> str:
+    """获取食堂推荐，返回 Markdown。"""
+    from sjtu_agent.agent.tools._dining import tool_recommend_canteen, tool_get_canteen_crowd
+
+    result = tool_recommend_canteen(campus=campus)
+    if not result.get("ok"):
+        crowd = tool_get_canteen_crowd(campus=campus)
+        if crowd.get("ok"):
+            lines = ["## 🍽️ 食堂实时拥挤度", ""]
+            for c in crowd.get("canteens", []):
+                label = c["overall_label"]
+                status = ("🟢" if label in ("空闲",) else
+                          "🟡" if label in ("适中",) else
+                          "🟠" if label in ("较挤",) else "🔴")
+                lines.append(f"- {status} **{c['name']}** — {label}（{c['overall_rate']}%）")
+            return "\n".join(lines)
+        return f"食堂数据暂时不可用：{result.get('error', '')}"
+
+    lines = [
+        f"## 🍽️ {result['meal_type']}推荐 · {result['campus']}校区",
+        "",
+        result.get("summary", ""),
+        "",
+    ]
+    for r in result.get("recommendations", []):
+        label = r["overall_label"]
+        status = ("🟢" if label in ("空闲",) else
+                  "🟡" if label in ("适中",) else
+                  "🟠" if label in ("较挤",) else "🔴")
+        lines.append(f"### {r['canteen_name']} {status} {label}（{r['overall_rate']}%）")
+        for reason in r.get("reasons", []):
+            lines.append(f"- {reason}")
+        if r.get("recommended_sub_areas"):
+            areas = "、".join(a["name"] for a in r["recommended_sub_areas"][:3])
+            lines.append(f"- 推荐窗口：{areas}")
+        lines.append("")
+
+    if result.get("has_history"):
+        lines.append(f"_基于 {result['history_count']} 条历史记录，推荐会越来越准_")
+    lines.append("_用 `/eat 徐汇` 切换校区，选好后告诉我「我去XX吃了」帮你记录偏好_")
+
+    return "\n".join(lines)
+
+
 # ── 多对话命令处理 ──────────────────────────────────────────────────────────
 
 def _do_hw_answer(open_id: str) -> str:
@@ -642,6 +688,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "[对话]  `/new <名称>`  `/list`  `/switch <N>`  `/name <N> <名>`  `/delete <N>`  `/history`\n\n"
                 "[作业]  `/hw`  `/hw do <N>`  `/hw brief <N>`  `/hw due <N>`  `/hw past`  `/hw all`\n\n"
                 "[新闻]  `/news`\n"
+                "[食堂]  `/eat [闵行|徐汇|张江]`\n"
                 "[AI]    `/aihot`  今日 AI 圈精选新闻\n\n"
                 "[LaTeX] `/template`  `/template <名称>`  `/template compile`  `/template clone <id>`  `/template push`\n\n"
                 "[信息]  查 DDL、看课表、查成绩、Canvas 课程公告和 quiz\n"
@@ -701,6 +748,12 @@ def _handle_commands(open_id: str, text: str) -> str | None:
         from sjtu_agent.news_aggregator.profile import UserProfile
         UserProfile().reset()
         return "[news] 已重置新闻画像，下次摘要将恢复默认推荐。"
+    if cmd == "/eat":
+        campus = parts[1].strip() if len(parts) > 1 else "闵行"
+        valid = {"闵行", "徐汇", "张江"}
+        if campus not in valid:
+            return f"[eat] 未知校区「{campus}」，可选：{' / '.join(valid)}"
+        return "[eat] 正在查询食堂拥挤度…\n\n" + _fetch_eat_recommendation(campus)
     if cmd == "/template":
         sub = parts[1].strip() if len(parts) > 1 else ""
         action = sub.split()[0] if sub else ""
