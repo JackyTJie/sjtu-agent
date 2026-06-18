@@ -61,7 +61,8 @@ class NewsAggregator:
 
         if not all_items:
             empty_msg = "📰 今天没有新的值得关注的内容。"
-            return empty_msg, empty_msg
+            empty_post = [[{"tag": "text", "text": empty_msg}]]
+            return empty_msg, empty_msg, empty_post
 
         # 4. 智能排序
         ranked = self.ranker.rank(
@@ -74,14 +75,15 @@ class NewsAggregator:
         print(f"[news] 排序后精选 {len(ranked)} 条", flush=True)
 
         # 5. 生成日报
-        md_digest   = self.builder.build(ranked, self.profile)
-        html_digest = self.builder.build_telegram_html(ranked, self.profile)
+        md_digest     = self.builder.build(ranked, self.profile)
+        html_digest   = self.builder.build_telegram_html(ranked, self.profile)
+        feishu_paras  = self.builder.build_feishu_post(ranked, self.profile)
 
         # 6. 标记已推送
         if ranked:
             self.storage.mark_pushed([item.id for item, _, _ in ranked])
 
-        return md_digest, html_digest
+        return md_digest, html_digest, feishu_paras
 
     def send_via_telegram(self, html_digest: str) -> bool:
         """通过 Telegram 推送日报。"""
@@ -124,6 +126,20 @@ class NewsAggregator:
                     print(f"[news] Telegram 推送异常 uid={uid}: {e}", flush=True)
                     success = False
         return success
+
+    def send_via_feishu(self, post_paras: list[list[dict]]) -> bool:
+        """通过飞书推送日报（post 格式）。"""
+        from sjtu_agent import paths as _paths
+        from sjtu_agent.paths import read_json_safe
+
+        cfg = read_json_safe(_paths.CONFIG_PATH, default={})
+        open_id = cfg.get("feishu_open_id", "")
+        if not open_id:
+            print("[news] 飞书未配置（需要 feishu_open_id），跳过推送", flush=True)
+            return False
+
+        from sjtu_agent.feishu_client import send_post_message
+        return send_post_message(open_id, post_paras)
 
     def send_via_wechat(self, md_digest: str) -> bool:
         """通过微信 ilink Bot 推送日报（纯文本/Markdown）。"""

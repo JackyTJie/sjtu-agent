@@ -91,6 +91,18 @@ _SERVICE_SPECS = {
         "log": "web.task.log",
         "schedule": "onlogon",  # 登录时启动
     },
+    "news-digest": {
+        "task_name": f"{_TASK_PREFIX}-NewsDigest",
+        "subcommand": "news-digest",
+        "log": "news_digest.task.log",
+        "schedule": "daily",
+    },
+    "aihot-push": {
+        "task_name": f"{_TASK_PREFIX}-AIHOTPush",
+        "subcommand": "aihot-push",
+        "log": "aihot_push.task.log",
+        "schedule": "daily",
+    },
 }
 
 

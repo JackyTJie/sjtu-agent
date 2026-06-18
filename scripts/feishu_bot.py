@@ -217,6 +217,7 @@ _FS_CTX = (
     "- 编译论文 PDF/帮我编译/生成 PDF → /template compile\n"
     "- 从 Overleaf 克隆模板/推送到 Overleaf → /template clone <id>, /template push\n"
     "- AI 资讯/今天 AI 圈/大模型新闻 → /aihot\n"
+    "- 校园新闻/今天有什么新闻/每日简报 → /news\n"
     "- 查看帮助/有什么功能/怎么用/命令列表 → /help\n"
     "\n"
     "## 主动引导\n"
@@ -224,6 +225,7 @@ _FS_CTX = (
     "📝 **作业管理**：/hw 列出作业，/hw do <序号> 下载解答，/hw due <N> 查看近期，/hw past 历史作业\n"
     "📄 **LaTeX 模板**：/template 列出模板，/template bachelor-thesis 套用毕业论文格式\n"
     "🤖 **AI 资讯**：/aihot 获取今日 AI 圈精选新闻（支持追问最新进展、大模型发布等）\n"
+    "📰 **校园新闻**：/news 生成校园新闻摘要（教务处+水源+交大新闻网+Canvas）\n"
     "📅 **学习信息**：查 DDL、看课表、查成绩、物理实验\n"
     "💬 **对话管理**：/new /list /switch /name /delete /history\n"
     "🔍 **校园搜索**：教务处通知、水源社区、选课社区评价\n"
@@ -906,6 +908,27 @@ def _fetch_aihot_news() -> str:
         return f"获取 AI 资讯失败：{e}"
 
 
+def _fetch_news_digest(top_k: int = 8) -> str:
+    """获取校园新闻摘要，返回 Markdown。"""
+    from sjtu_agent.news_aggregator import NewsAggregator
+    from sjtu_agent.agent.chat_loop import load_agent_config
+    from sjtu_agent.agent.runner import _make_client
+
+    llm_client = None
+    model = ""
+    try:
+        cfg = load_agent_config()
+        if cfg.get("api_key") and cfg.get("model"):
+            llm_client = _make_client(cfg)
+            model = cfg["model"]
+    except Exception:
+        pass
+
+    aggregator = NewsAggregator(llm_client=llm_client, model=model)
+    md_digest, _, _ = aggregator.run(hours=24, top_k=top_k)
+    return md_digest
+
+
 # ── 多对话命令处理 ──────────────────────────────────────────────────────────
 
 def _do_hw_answer(open_id: str) -> str:
@@ -1011,8 +1034,9 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "**飞书 Bot 命令帮助**\n\n"
                 "[对话]  `/new <名称>`  `/list`  `/switch <N>`  `/name <N> <名>`  `/delete <N>`  `/history`\n\n"
                 "[作业]  `/hw`  `/hw do <N>`  `/hw brief <N>`  `/hw due <N>`  `/hw past`  `/hw all`\n\n"
-                "[LaTeX] `/template`  `/template <名称>`  `/template compile`  `/template clone <id>`  `/template push`\n\n"
+                "[新闻]  `/news`\n"
                 "[AI]    `/aihot`  今日 AI 圈精选新闻\n\n"
+                "[LaTeX] `/template`  `/template <名称>`  `/template compile`  `/template clone <id>`  `/template push`\n\n"
                 "[信息]  查 DDL、看课表、查成绩、Canvas 课程公告和 quiz\n"
                 "[记忆]  我会记住你聊过的课程、考试、学习偏好，下次对话自动关联\n\n"
                 "[系统]  `/help`"
@@ -1137,6 +1161,22 @@ def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None
         _reply_text(message_id, f"[homework] 出错：{e}")
     finally:
         _hw_in_progress.discard(sender_open_id)
+
+
+def _process_news_command(sender_open_id: str, message_id: str) -> None:
+    """后台执行 /news 命令（网络 I/O + LLM 排序）。"""
+    try:
+        digest = _fetch_news_digest()
+        # 直接通过 _send_to_chat 推送 Markdown 摘要
+        from sjtu_agent.paths import read_json_safe, CONFIG_PATH
+        cfg = read_json_safe(CONFIG_PATH, default={})
+        chat_id = cfg.get("feishu_open_id", sender_open_id)
+        _send_to_chat(chat_id, f"📰 校园新闻摘要\n\n{digest}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[feishu] /news 命令异常: {e}")
+        _reply_text(message_id, f"[news] 出错：{e}")
 
 
 def _build_parser_context(local_path: Path, media_type: str = "file", max_chars: int = 3000) -> tuple[str, str]:
@@ -1437,6 +1477,13 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             _hw_in_progress.add(sender_open_id)
             _reply_text(message_id, "[homework] 正在处理，请稍候…")
             _EXECUTOR.submit(_process_hw_command, sender_open_id, message_id, text)
+            return
+
+        # /news 也是重命令（网络 I/O + LLM 排序），后台执行
+        if t.lower().startswith("/news"):
+            print(f"[feishu] 命令（后台执行）: {text[:40]!r}")
+            _reply_text(message_id, "[news] 正在生成校园新闻摘要，请稍候…")
+            _EXECUTOR.submit(_process_news_command, sender_open_id, message_id)
             return
 
         cmd_result = _handle_commands(sender_open_id, text)

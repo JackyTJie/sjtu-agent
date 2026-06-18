@@ -169,3 +169,75 @@ class DigestBuilder:
 
         lines.append("<i>回复 /news_block &lt;分类&gt; 屏蔽某类</i>")
         return "\n".join(lines)
+
+    def build_feishu_post(
+        self,
+        ranked: list[tuple["NewsItem", float, str]],
+        profile: "UserProfile",
+    ) -> list[list[dict]]:
+        """生成飞书 post 格式段落列表，供 ``send_post_message`` 直接使用。
+
+        每段格式::
+
+            [{tag:"text", text:"emoji 标题（推荐度）"},
+             {tag:"a", text:"阅读原文", href:url}]
+        """
+        now = datetime.now(CST)
+        weekday = "一二三四五六日"[now.weekday()]
+        date_str = now.strftime(f"%Y-%m-%d 周{weekday}")
+
+        paras: list[list[dict]] = []
+
+        # 标题
+        paras.append([{"tag": "text", "text": f"📰 SJTU 早报 · {date_str}"}])
+
+        if not ranked:
+            paras.append([{"tag": "text", "text": "今天没有特别值得关注的新内容，继续加油！"}])
+            return paras
+
+        profile_data = profile.load()
+        interests = profile_data.get("interests", {})
+        top_tags = sorted(interests.items(), key=lambda x: x[1], reverse=True)[:3]
+        tags_str = "、".join(f"「{t}」" for t, _ in top_tags) if top_tags else "校园动态"
+
+        paras.append([{"tag": "text", "text": f"💡 为你精选 {len(ranked)} 条（基于 {tags_str}）"}])
+        paras.append([{"tag": "text", "text": ""}])
+
+        # 按分数分层
+        important = [(i, s, r) for i, s, r in ranked if s >= 0.8]
+        relevant  = [(i, s, r) for i, s, r in ranked if 0.6 <= s < 0.8]
+        general   = [(i, s, r) for i, s, r in ranked if s < 0.6]
+
+        def _render_group(label: str, group: list) -> None:
+            paras.append([{"tag": "text", "text": label}])
+            for i, (item, score, reason) in enumerate(group, 1):
+                emoji = _SOURCE_EMOJI.get(item.source, "📄")
+                src_name = _SOURCE_NAME.get(item.source, item.source)
+                age = _age_str(item)
+                score_pct = f"{int(score * 100)}%"
+
+                title_el = {"tag": "text", "text": f"{i}. {emoji} {item.title}（{score_pct}）"}
+                subtitle_el = {"tag": "text", "text": f"   📍 {src_name} · {age}"}
+
+                if item.url:
+                    paras.append([title_el])
+                    paras.append([subtitle_el, {"tag": "a", "text": "🔗 阅读原文", "href": item.url}])
+                else:
+                    paras.append([title_el])
+                    paras.append([subtitle_el])
+
+                if reason and score >= 0.8:
+                    paras.append([{"tag": "text", "text": f"   💬 {reason}"}])
+
+        if important:
+            _render_group("🔥 重要", important)
+        if relevant:
+            _render_group("📚 相关", relevant)
+        if general:
+            _render_group("📌 其他", general)
+
+        paras.append([{"tag": "text", "text": ""}])
+        paras.append([{"tag": "text", "text": "推送越用越准，多和我聊天我会更懂你。"}])
+        paras.append([{"tag": "text", "text": "回复 /news_block 屏蔽某类，/news_reset 重置画像。"}])
+
+        return paras

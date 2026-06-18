@@ -54,7 +54,7 @@ def main():
 
     from sjtu_agent.news_aggregator import NewsAggregator
     aggregator = NewsAggregator(llm_client=llm_client, model=model)
-    md_digest, html_digest = aggregator.run(hours=args.hours, top_k=args.top_k)
+    md_digest, html_digest, feishu_paras = aggregator.run(hours=args.hours, top_k=args.top_k)
 
     print("\n" + "=" * 60)
     print(md_digest)
@@ -72,6 +72,12 @@ def main():
             print("[news] ✅ 微信推送成功", flush=True)
         else:
             print("[news] ⚠ 微信推送失败或未配置", flush=True)
+
+        ok_fs = aggregator.send_via_feishu(feishu_paras)
+        if ok_fs:
+            print("[news] ✅ 飞书推送成功", flush=True)
+        else:
+            print("[news] ⚠ 飞书推送失败或未配置", flush=True)
     else:
         print("[news] --dry-run 模式，跳过推送", flush=True)
 
