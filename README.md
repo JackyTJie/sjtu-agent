@@ -64,7 +64,7 @@ sjtu-agent update       # 一键更新到最新版本
 
 | 平台 | 启动命令 | 斜杠命令 |
 | --- | --- | --- |
-| 飞书 | `sjtu-agent feishu-bot` | `/hw` `/list` `/new` `/template` `/aihot` `/help` |
+| 飞书 | `sjtu-agent feishu-bot` | `/hw` `/news` `/eat` `/aihot` `/template` `/list` `/new` `/switch` `/name` `/delete` `/history` `/news_block` `/news_reset` `/help` |
 | Telegram | `sjtu-agent telegram-bot` | — |
 | 微信 | `sjtu-agent wechat-bot` | — |
 | QQ | `sjtu-agent qq-bot` | — |
@@ -125,6 +125,42 @@ sjtu-agent aihot             # 终端推送
 ```
 
 灵感来源：[KKKKhazix/khazix-skills](https://github.com/KKKKhazix/khazix-skills) 的 ai-hot 技能（MIT）。
+
+### 校园新闻
+
+智能新闻聚合——采集教务处、水源社区、交大新闻网、Canvas 四个源，两阶段排序（关键词初筛 + LLM 精排），按用户画像个性化推荐。飞书 Bot `/news` 即时获取，定时推送每天 10:00 自动发送。
+
+```text
+/news                         # 校园新闻摘要
+/news_block <分类>            # 屏蔽某类新闻
+/news_reset                   # 重置画像
+```
+
+```bash
+sjtu-agent news-digest --dry-run   # 预览
+sjtu-agent news-digest --no-llm    # 纯关键词排序
+sjtu-agent install-daemons          # 自动注册 news-digest 每日定时任务
+```
+
+### 食堂推荐
+
+基于 campuslife.sjtu.edu.cn 实时拥挤度 API + 历史用餐偏好学习，智能推荐最佳就餐地点。支持模糊名称匹配（如「三餐」「哈乐」）。
+
+```text
+/eat                    # 闵行校区推荐
+/eat 徐汇               # 徐汇校区推荐
+/eat 张江               # 张江校区推荐
+```
+
+选择食堂后告诉 Bot 「我去 XX 吃了」，自动记录偏好，下次推荐会更符合口味。
+
+### Canvas 课程文件
+
+浏览/下载 Canvas 课程文件（课件、资料），追踪已处理进度。
+
+```text
+「列出 Canvas 文件」「下载这个课件」「看看还有哪些没整理」
+```
 
 ### Canvas 课程监控
 
@@ -218,7 +254,7 @@ sjtu-agent install-daemons                    # 安装全部服务
 sjtu-agent install-daemons --services daily-report remind-check
 ```
 
-服务列表：`web` `daily-report` `remind-check` `canvas-watcher` `telegram-bot` `qq-bot` `feishu-bot` `wechat-bot` `aihot-push`
+服务列表：`web` `daily-report` `remind-check` `canvas-watcher` `news-digest` `aihot-push` `telegram-bot` `qq-bot` `feishu-bot` `wechat-bot`
 
 ### Windows
 
