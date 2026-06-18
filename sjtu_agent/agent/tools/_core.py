@@ -100,6 +100,12 @@ from sjtu_agent.agent.tools._canvas_files import (
     tool_canvas_track_mark, tool_canvas_track_unmark, tool_canvas_track_list,
     tool_canvas_track_status, tool_canvas_track_diff, tool_canvas_track_mark_course,
 )
+from sjtu_agent.agent.tools._dining import (
+    TOOLS_ENTRIES as _DINING_TOOLS,
+    tool_get_canteen_crowd, tool_get_canteen_info,
+    tool_recommend_canteen, tool_record_dining_choice,
+    tool_get_dining_history,
+)
 
 TOOLS = [
     {
@@ -845,6 +851,7 @@ TOOLS = [
     },
     *_EMAIL_TOOLS,
     *_CANVAS_FILES_TOOLS,
+    *_DINING_TOOLS,
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3592,6 +3599,11 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "qq_add_user":              r = tool_qq_add_user(**args)
         elif name == "qq_list_users":            r = tool_qq_list_users()
         elif name == "qq_remove_user":           r = tool_qq_remove_user(**args)
+        elif name == "get_canteen_crowd":    r = tool_get_canteen_crowd(**args)
+        elif name == "get_canteen_info":     r = tool_get_canteen_info(**args)
+        elif name == "recommend_canteen":    r = tool_recommend_canteen(**args)
+        elif name == "record_dining_choice": r = tool_record_dining_choice(**args)
+        elif name == "get_dining_history":   r = tool_get_dining_history(**args)
         else:                               r = {"error": f"未知工具: {name}"}
     except Exception as e:
         r = {"error": str(e)}

@@ -25,6 +25,7 @@ include = ["sjtu_agent", "sjtu_agent.*"]
 
 [tool.setuptools.package-data]
 "sjtu_agent.web" = ["static/*"]
+"sjtu_agent.data" = ["*.json"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
