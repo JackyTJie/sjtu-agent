@@ -1,0 +1,77 @@
+"""sjtu_agent/calendar.py — SJTU academic calendar (holidays/ makeup days).
+
+Reads a static JSON file shipped with the package:
+  sjtu_agent/data/academic_calendar.json
+
+Usage::
+
+    from sjtu_agent.calendar import AcademicCalendar
+
+    cal = AcademicCalendar(DATA_DIR)
+    ctx = cal.get_context(datetime.now(CST))
+    if ctx:
+        print(ctx)  # "今天是端午节，全校放假，无课程安排。"
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+from pathlib import Path
+
+_CALENDAR_FILE = "academic_calendar.json"
+
+
+class AcademicCalendar:
+    """Provide holiday/ schedule context for date-aware prompts."""
+
+    def __init__(self, data_dir: Path):
+        self._path = data_dir / _CALENDAR_FILE
+        self._data: dict | None = None
+
+    # ── public API ───────────────────────────────────────────────────────
+
+    def load(self) -> dict:
+        if self._data is None:
+            try:
+                # also look in the shipped package data
+                from sjtu_agent.paths import PACKAGE_ROOT
+                path = self._path if self._path.exists() else PACKAGE_ROOT / "data" / _CALENDAR_FILE
+                self._data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                self._data = {"holidays": {}, "makeup_days": {}}
+        return self._data
+
+    def is_holiday(self, date: _dt.date) -> tuple[bool, str]:
+        """Return (is_holiday, label)."""
+        self.load()
+        key = date.isoformat()
+        name = self._data.get("holidays", {}).get(key, "")
+        return (bool(name), name)
+
+    def is_makeup_day(self, date: _dt.date) -> tuple[bool, str]:
+        """Return (is_makeup, label)."""
+        self.load()
+        key = date.isoformat()
+        note = self._data.get("makeup_days", {}).get(key, "")
+        return (bool(note), note)
+
+    def get_semester(self) -> str:
+        self.load()
+        return self._data.get("semester", "")
+
+    def get_context(self, date: _dt.date | None = None) -> str:
+        """Build a prompt-ready context string for the given date."""
+        if date is None:
+            date = _dt.date.today()
+
+        parts: list[str] = []
+
+        is_hol, hol_name = self.is_holiday(date)
+        if is_hol:
+            parts.append(f"今天是{hol_name}，全校放假，无课程安排。")
+
+        is_mk, mk_note = self.is_makeup_day(date)
+        if is_mk:
+            parts.append(f"今天是调休补课日（{mk_note}），按补课安排上课。")
+
+        return " ".join(parts)

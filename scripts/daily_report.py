@@ -313,6 +313,16 @@ def build_report(report_type: str = "evening") -> str:
 【校园新闻/水源热帖（近24h）】
 {news_raw or "（暂无）"}"""
 
+    # 校历假日/调休上下文
+    try:
+        from sjtu_agent.calendar import AcademicCalendar
+        from sjtu_agent.paths import DATA_DIR
+        cal_ctx = AcademicCalendar(DATA_DIR).get_context(now.date())
+        if cal_ctx:
+            data_ctx += f"\n\n【校历提醒】\n{cal_ctx}"
+    except Exception:
+        pass
+
     _THINK_RE = __import__("re").compile(r"<think>.*?</think>", __import__("re").DOTALL)
 
     _type_hints = {

@@ -1,0 +1,77 @@
+"""Tests for sjtu_agent/calendar.py — AcademicCalendar."""
+import datetime as _dt
+from pathlib import Path
+
+import pytest
+
+from sjtu_agent.calendar import AcademicCalendar
+
+
+@pytest.fixture
+def cal():
+    """Calendar pointing to the real data file shipped with the package."""
+    from sjtu_agent.paths import DATA_DIR
+    return AcademicCalendar(DATA_DIR)
+
+
+class TestHolidays:
+    def test_dragon_boat(self, cal):
+        is_hol, name = cal.is_holiday(_dt.date(2026, 6, 19))
+        assert is_hol is True
+        assert "端午" in name
+
+    def test_labor_day(self, cal):
+        is_hol, name = cal.is_holiday(_dt.date(2026, 5, 1))
+        assert is_hol is True
+        assert "劳动" in name
+
+    def test_qingming(self, cal):
+        is_hol, name = cal.is_holiday(_dt.date(2026, 4, 5))
+        assert is_hol is True
+        assert "清明" in name
+
+    def test_not_holiday(self, cal):
+        is_hol, _ = cal.is_holiday(_dt.date(2026, 3, 15))
+        assert is_hol is False
+
+    def test_holiday_label_returned(self, cal):
+        _, name = cal.is_holiday(_dt.date(2026, 4, 4))
+        assert name == "清明节"
+
+
+class TestMakeupDays:
+    def test_labor_makeup(self, cal):
+        is_mk, note = cal.is_makeup_day(_dt.date(2026, 5, 9))
+        assert is_mk is True
+        assert "周一" in note
+
+    def test_not_makeup(self, cal):
+        is_mk, _ = cal.is_makeup_day(_dt.date(2026, 5, 10))
+        assert is_mk is False
+
+
+class TestContext:
+    def test_holiday_context(self, cal):
+        ctx = cal.get_context(_dt.date(2026, 6, 19))
+        assert "端午" in ctx
+        assert "放假" in ctx
+
+    def test_makeup_context(self, cal):
+        ctx = cal.get_context(_dt.date(2026, 5, 9))
+        assert "补课" in ctx or "调休" in ctx
+
+    def test_normal_day_empty(self, cal):
+        ctx = cal.get_context(_dt.date(2026, 3, 15))
+        assert ctx == ""
+
+    def test_today_does_not_crash(self, cal):
+        """Sanity: calling with no args should not throw."""
+        ctx = cal.get_context()
+        assert isinstance(ctx, str)
+
+
+class TestSemester:
+    def test_semester_string(self, cal):
+        sem = cal.get_semester()
+        assert "2025-2026" in sem
+        assert "2" in sem
