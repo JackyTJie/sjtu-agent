@@ -306,4 +306,4 @@ sjtu-agent install-daemons
 
 ## 版本
 
-当前版本：**v0.6.1**。发布历史见 [Releases](https://github.com/kuan-er/sjtu-agent/releases)。
+当前版本：**v0.6.2**。发布历史见 [Releases](https://github.com/kuan-er/sjtu-agent/releases)。
