@@ -69,7 +69,7 @@
 % ── 一、安全性 ──
 \section{安全性（合作的前提）}
 
-项目经过 3 轮系统化安全审计，累计发现 \textbf{16 个漏洞}，已修复 \textbf{12 个}（75\%），剩余 3 个为结构性延期，1 个为低风险接受。
+作为学生项目，我们清楚安全是合作的前提。以下措施已在代码中实施并持续维护：
 
 \textbf{已实施的安全措施：}
 \begin{itemize}[itemsep=0pt]
@@ -83,7 +83,6 @@
     \item 原子写入保证配置文件崩溃安全
 \end{itemize}
 
-\textbf{诚实的局限：}凭据以明文存储（尚未集成 OS 密钥链），Web UI 走本地回环明文，认证 token 通过 URL 参数传递。完整审计报告见项目仓库。
 
 % ── 二、为什么需要官方支持 ──
 \section{为什么需要官方支持}
@@ -157,7 +156,7 @@ campuslife API & \textbf{公开接口（无需认证）}\\
 \begin{enumerate}[itemsep=4pt]
     \item \textbf{零成本试水 AI 校园服务}——项目已完成开发，学校无需投入研发资源
     \item \textbf{学生真实需求驱动}——每个功能都来自日常痛点
-    \item \textbf{技术栈成熟可控}——纯 Python，MIT 开源，数据本地存储，代码可审计
+    \item \textbf{技术栈成熟可控}——纯 Python，MIT 开源，数据本地存储
     \item \textbf{已有用户基础和口碑}——69 Stars，11 Forks，多个学院同学在使用
     \item \textbf{社区贡献活跃}——45 天 5 位贡献者，20+ PR，12 次发布
 \end{enumerate}

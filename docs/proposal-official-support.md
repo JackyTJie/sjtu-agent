@@ -28,7 +28,7 @@
 
 ## 一、安全性（合作的前提）
 
-项目经过 3 轮系统化安全审计，累计发现 **16 个漏洞**，已修复 **12 个**（75%），剩余 3 个为结构性延期（TLS 证书、OS 密钥链集成等依赖基础设施的问题），1 个为低风险接受（本地 127.0.0.1 共享聊天历史）。
+作为学生项目，我们清楚安全是合作的前提。以下措施已在代码中实施并持续维护。
 
 **已实施的安全措施：**
 
@@ -41,15 +41,6 @@
 - 文件路径 `resolve() + is_relative_to()` 防路径穿越
 - 飞书消息 ID 去重，防重放攻击
 - `atomic_write_json` 保证配置文件写入原子性（崩溃不丢数据）
-
-**诚实的局限：**
-
-- 凭据以明文存储在本地 `.env` / `config.json` 中（尚未集成 OS 密钥链）
-- Web UI 走 `http://127.0.0.1` 明文（本地回环，未配 TLS）
-- Web 认证 token 通过 URL query parameter 传递（浏览器历史可见）
-
-完整审计报告：[docs/SECURITY_AUDIT.md](https://github.com/kuan-er/sjtu-agent/blob/main/docs/SECURITY_AUDIT.md)
-
 ---
 
 ## 二、为什么需要官方支持

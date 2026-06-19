@@ -1,0 +1,51 @@
+graph TD
+    subgraph 数据源["校园数据源"]
+        Canvas[Canvas LMS<br/>课程+作业+文件]
+        MySJTU[教学信息服务网<br/>课表+成绩]
+        Phycai[物理实验平台<br/>phycai]
+        MOOC[中国大学MOOC<br/>/ AI 好课]
+        CampusLife[campuslife API<br/>食堂拥挤度<br/>公开接口]
+        JWC[教务处通知]
+        Shuiyuan[水源社区]
+        Email[交大邮箱<br/>IMAP readonly]
+    end
+
+    subgraph Agent["SJTU Agent 核心"]
+        CLI[CLI 终端]
+        Bot[Bot 引擎<br/>飞书/微信/QQ 统一]
+        Tools[30+ LLM 工具]
+        Scheduler[定时调度<br/>日报/DDL/新闻]
+        Memory[ChromaDB 长期记忆]
+        News[新闻聚合器<br/>两阶段 LLM 排序]
+        Dining[食堂推荐引擎<br/>加权评分+偏好学习]
+    end
+
+    subgraph 用户["用户入口"]
+        Feishu[飞书 Bot<br/>主战场]
+        WeChat[微信 Bot]
+        QQ[QQ Bot]
+        WebUI[Web 配置界面]
+    end
+
+    Canvas --> Tools
+    MySJTU --> Scheduler
+    Phycai --> Scheduler
+    MOOC --> Scheduler
+    CampusLife --> Dining
+    JWC --> News
+    Shuiyuan --> News
+    Email --> Bot
+    Tools --> Bot
+    Scheduler --> Bot
+    Memory --> Bot
+    News --> Bot
+    Dining --> Bot
+    Bot --> Feishu
+    Bot --> WeChat
+    Bot --> QQ
+    CLI --> Tools
+    WebUI --> Tools
+
+    style 数据源 fill:#e8f0fe,stroke:#1a73e8
+    style Agent fill:#e6f4ea,stroke:#137333
+    style 用户 fill:#fef7e0,stroke:#f9ab00
