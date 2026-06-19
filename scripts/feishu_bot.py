@@ -1021,23 +1021,32 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
         )
         model = conv["model_box"][0]
 
-        if msg_type == "image" and _model_supports_vision(model):
-            img_bytes = local_path.read_bytes()
-            b64 = base64.b64encode(img_bytes).decode()
-            content: list = [{"type": "text", "text": "用户发送了一张图片，请先描述图片内容，再回答用户问题。"}]
-            if agent._is_anthropic_model(model):
-                content.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-                })
+        if msg_type == "image":
+            if _model_supports_vision(model):
+                img_bytes = local_path.read_bytes()
+                b64 = base64.b64encode(img_bytes).decode()
+                content: list = [{"type": "text", "text": "用户发送了一张图片，请先描述图片内容，再回答用户问题。"}]
+                if agent._is_anthropic_model(model):
+                    content.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                    })
+                else:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    })
+                reply = _capture_turn_multimodal(conv, content, sender_open_id)
+                _reply_text(message_id, reply)
+                return
             else:
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                })
-            reply = _capture_turn_multimodal(conv, content, sender_open_id)
-            _reply_text(message_id, reply)
-            return
+                _reply_text(message_id,
+                    f"当前后端模型（{model}）不支持识图功能，无法直接理解图片内容。\n\n"
+                    "建议：\n"
+                    "- 用文字描述图片中的内容，Bot 会尽力帮你分析\n"
+                    "- 在 Web 配置页切换到支持视觉的模型（如 gpt-4o、claude-4-sonnet、qwen-vl-max）\n"
+                    "- 安装 OCR 解析后端：`sjtu-agent install-parse-backends --backend pdf_ocr`")
+                return
 
         parser_media_type = "audio" if msg_type == "audio" else ("image" if msg_type == "image" else "file")
         parsed_ctx, parse_err = _build_parser_context(local_path, media_type=parser_media_type)
