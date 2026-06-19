@@ -3,6 +3,9 @@
 Reads a static JSON file shipped with the package:
   sjtu_agent/data/academic_calendar.json
 
+Supports multiple semesters in one file. Dates are matched across all
+semesters — no need to pre-select the active semester.
+
 Usage::
 
     from sjtu_agent.calendar import AcademicCalendar
@@ -22,42 +25,71 @@ _CALENDAR_FILE = "academic_calendar.json"
 
 
 class AcademicCalendar:
-    """Provide holiday/ schedule context for date-aware prompts."""
+    """Provide holiday / schedule context for date-aware prompts."""
 
     def __init__(self, data_dir: Path):
         self._path = data_dir / _CALENDAR_FILE
         self._data: dict | None = None
-
-    # ── public API ───────────────────────────────────────────────────────
+        # cache: flat lookup built from all semesters
+        self._all_holidays: dict[str, str] | None = None
+        self._all_makeup: dict[str, str] | None = None
 
     def load(self) -> dict:
-        if self._data is None:
-            try:
-                # also look in the shipped package data
-                from sjtu_agent.paths import PACKAGE_ROOT
-                path = self._path if self._path.exists() else PACKAGE_ROOT / "data" / _CALENDAR_FILE
-                self._data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                self._data = {"holidays": {}, "makeup_days": {}}
+        """Load raw JSON. Returns empty structure on any error."""
+        if self._data is not None:
+            return self._data
+        try:
+            from sjtu_agent.paths import PACKAGE_ROOT
+            path = self._path if self._path.exists() else PACKAGE_ROOT / "data" / _CALENDAR_FILE
+            self._data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self._data = {"semesters": {}}
         return self._data
+
+    # ── internal: build flat lookups across all semesters ──────────────
+
+    def _ensure_flattened(self) -> None:
+        if self._all_holidays is not None:
+            return
+        self.load()
+        self._all_holidays = {}
+        self._all_makeup = {}
+        for key, sem in self._data.get("semesters", {}).items():
+            for date_str, name in sem.get("holidays", {}).items():
+                self._all_holidays[date_str] = name
+            for date_str, note in sem.get("makeup_days", {}).items():
+                self._all_makeup[date_str] = note
+
+    # ── public API ──────────────────────────────────────────────────────
 
     def is_holiday(self, date: _dt.date) -> tuple[bool, str]:
         """Return (is_holiday, label)."""
-        self.load()
+        self._ensure_flattened()
         key = date.isoformat()
-        name = self._data.get("holidays", {}).get(key, "")
+        name = self._all_holidays.get(key, "")
         return (bool(name), name)
 
     def is_makeup_day(self, date: _dt.date) -> tuple[bool, str]:
         """Return (is_makeup, label)."""
-        self.load()
+        self._ensure_flattened()
         key = date.isoformat()
-        note = self._data.get("makeup_days", {}).get(key, "")
+        note = self._all_makeup.get(key, "")
         return (bool(note), note)
 
-    def get_semester(self) -> str:
+    def get_semester(self, date: _dt.date | None = None) -> str:
+        """Return the semester key active on *date* (e.g. '2025-2026-2')."""
+        if date is None:
+            date = _dt.date.today()
         self.load()
-        return self._data.get("semester", "")
+        for key, sem in sorted(self._data.get("semesters", {}).items()):
+            try:
+                start = _dt.date.fromisoformat(sem["start_date"])
+                end = _dt.date.fromisoformat(sem["end_date"])
+                if start <= date <= end:
+                    return key
+            except (KeyError, ValueError):
+                continue
+        return ""
 
     def get_context(self, date: _dt.date | None = None) -> str:
         """Build a prompt-ready context string for the given date."""

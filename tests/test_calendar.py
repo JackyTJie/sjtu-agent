@@ -71,7 +71,22 @@ class TestContext:
 
 
 class TestSemester:
-    def test_semester_string(self, cal):
-        sem = cal.get_semester()
-        assert "2025-2026" in sem
-        assert "2" in sem
+    def test_spring_semester(self, cal):
+        sem = cal.get_semester(_dt.date(2026, 3, 15))
+        assert sem == "2025-2026-2"
+
+    def test_summer_semester(self, cal):
+        sem = cal.get_semester(_dt.date(2026, 7, 10))
+        assert sem == "2025-2026-3"
+
+    def test_summer_no_holidays(self, cal):
+        is_hol, _ = cal.is_holiday(_dt.date(2026, 7, 10))
+        assert is_hol is False
+
+    def test_summer_no_makeup(self, cal):
+        is_mk, _ = cal.is_makeup_day(_dt.date(2026, 7, 10))
+        assert is_mk is False
+
+    def test_summer_context_empty(self, cal):
+        ctx = cal.get_context(_dt.date(2026, 7, 10))
+        assert ctx == ""
