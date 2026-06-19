@@ -370,6 +370,7 @@ def _download_feishu_resource(message_id: str, file_key: str, msg_type: str, fil
     name = (filename or "").strip()
     if not name:
         name = f"{msg_type}_{file_key[:10]}{suffix}"
+    name = Path(name).name  # strip directory components to prevent path traversal
     save_path = _TMP_DIR / name
     save_path.write_bytes(resp.content)
     return save_path
@@ -1127,6 +1128,14 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         # 过滤"清空聊天记录"/撤回消息产生的系统通知
         if text in {"此消息已删除", "该消息已被撤回"}:
             print(f"[feishu] 跳过已删除/撤回的系统消息 message_id={message_id}")
+            return
+
+        # 白名单检查（所有命令和对话均需校验）
+        if ALLOWED_OPEN_IDS and sender_open_id not in ALLOWED_OPEN_IDS:
+            print(f"[feishu] [!] 未授权 open_id：{sender_open_id}")
+            _reply_text(message_id, "你不在该机器人的允许列表中。\n"
+                        f"请把这个 open_id 加入 config.json 的 feishu_allowed_open_ids:\n"
+                        f"{sender_open_id}")
             return
 
         # ── 多对话命令拦截 ──────────────────────────────────────────

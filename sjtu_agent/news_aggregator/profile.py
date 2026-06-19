@@ -293,7 +293,10 @@ class UserProfile:
 
 
 def log_conversation(user_text: str, agent_reply: str) -> None:
-    """将一轮对话追加到 conversation_log.jsonl（供 deep_update 使用）。"""
+    """将一轮对话追加到 conversation_log.jsonl（供 deep_update 使用）。
+
+    最多保留最近 1000 行（500 轮对话），旧数据自动截断。
+    """
     log_path = _paths.CONVERSATION_LOG_PATH
     log_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -307,9 +310,14 @@ def log_conversation(user_text: str, agent_reply: str) -> None:
         "text": agent_reply[:500],
     }
     try:
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            f.write(json.dumps(reply_entry, ensure_ascii=False) + "\n")
+        lines = []
+        if log_path.exists():
+            lines = log_path.read_text(encoding="utf-8").rstrip("\n").split("\n")
+        lines.append(json.dumps(entry, ensure_ascii=False))
+        lines.append(json.dumps(reply_entry, ensure_ascii=False))
+        if len(lines) > 1000:
+            lines = lines[-1000:]
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except Exception:
         pass
 
