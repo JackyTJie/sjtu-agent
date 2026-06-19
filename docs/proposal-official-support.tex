@@ -1,0 +1,186 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{ctexart}
+
+% ── 页面 ──
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    pdftitle={SJTU Agent — 来自学生开发者的合作邀请},
+    pdfauthor={SJTU Agent 开发团队},
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage\ / \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0pt}
+
+\begin{document}
+
+% ── 标题 ──
+\begin{center}
+    {\LARGE \textbf{SJTU Agent}}
+
+    \vspace{0.5em}
+    {\large 来自学生开发者的合作邀请}
+
+    \vspace{1em}
+    \small 2026年6月 \quad·\quad v0.6.2 \quad·\quad \href{https://github.com/kuan-er/sjtu-agent}{github.com/kuan-er/sjtu-agent}
+\end{center}
+
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+\begin{quote}
+2026 年五一假期，几个交大学生开始写一个校园 AI 助手。45 天、12 个版本、69 个 Star 之后，我们想和学校聊聊。
+\end{quote}
+
+% ── 项目速览 ──
+\section*{项目速览}
+
+\begin{tabularx}{\textwidth}{lX}
+\textbf{启动时间} & 2026 年 5 月 5 日 \\
+\textbf{当前版本} & v0.6.2（12 次发布）\\
+\textbf{代码规模} & \textasciitilde20,000 行 Python \\
+\textbf{测试覆盖} & 287 个自动化测试，GitHub Actions CI \\
+\textbf{社区活跃度} & 69 Stars，11 Forks，20+ 合并 PR \\
+\textbf{贡献者} & Azzygoatcoder（300 提交）、kuan-er（103 提交）、dajiaohuang、Aixiaoxia、JackyTJie \\
+\textbf{许可证} & MIT 开源 \\
+\end{tabularx}
+
+\vspace{0.5em}
+\textbf{核心原则：学生维护、完全开源、零经费、业余时间开发。}
+
+\subsection*{开发方式}
+
+诚实地说：这个项目\textbf{主要通过 Claude Code 等 AI 编程工具辅助开发}。我们作为学生，并不具备专业的软件工程团队——是 AI 工具让我们在 45 天内把想法变成了 12 个可用的版本。
+
+这不是借口，也不是炫耀。我们想表达的是：\textbf{在 AI 时代，学生对校园信息化的参与门槛已经大幅降低}。如果有学校的数据接口和平台支持，我们能做出远比现在更好的东西。
+
+% ── 一、安全性 ──
+\section{安全性（合作的前提）}
+
+项目经过 3 轮系统化安全审计，累计发现 \textbf{16 个漏洞}，已修复 \textbf{12 个}（75\%），剩余 3 个为结构性延期，1 个为低风险接受。
+
+\textbf{已实施的安全措施：}
+\begin{itemize}[itemsep=0pt]
+    \item 用户凭据储存在本地文件系统，\textbf{不上传任何远程服务器}
+    \item 凭据文件自动设置 \texttt{0o600} 权限（Unix/macOS）
+    \item 飞书 Bot 支持白名单访问控制
+    \item 所有命令均需通过白名单校验
+    \item Python 代码执行时自动剥离敏感环境变量
+    \item 外部 HTTP 请求强制 HTTPS，URL 校验阻止 SSRF
+    \item 文件路径 \texttt{resolve() + is\_relative\_to()} 防路径穿越
+    \item 原子写入保证配置文件崩溃安全
+\end{itemize}
+
+\textbf{诚实的局限：}凭据以明文存储（尚未集成 OS 密钥链），Web UI 走本地回环明文，认证 token 通过 URL 参数传递。完整审计报告见项目仓库。
+
+% ── 二、为什么需要官方支持 ──
+\section{为什么需要官方支持}
+
+作为学生项目，我们\textbf{打通了所有能通过公开渠道获取的数据源}。但以下能力，学生力量做不到：
+
+\vspace{0.5em}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{重要度} & \textbf{想做但做不了的事} \\
+\midrule
+{[重要]} & 食堂推荐接入一码通消费记录（脱敏） \\
+{[重要]} & 校历自动获取（节假日/调休），替代手动录入 JSON \\
+{[重要]} & 稳定的 jAccount OAuth 认证，替代 Playwright 模拟登录 \\
+{[中等]} & 课表/成绩数据稳定获取的教务系统接口 \\
+{[中等]} & 降低部署门槛——学校云计算资源托管，支持模块化安装 \\
+{[一般]} & 移动端入口——接入”交我办”小程序 \\
+\bottomrule
+\end{tabularx}
+
+\subsection*{一个具体例子：\texttt{/eat} 是怎么做出来的}
+
+食堂推荐功能能实现，是因为 campuslife API \textbf{恰好是公开的}。但推荐精度可以更高——如果能接入一码通消费记录（脱敏），系统就能学习用户的真实口味。贡献者 @JackyTJie 曾尝试抓包交我办：
+
+\begin{quote}
+“全都加密了，认证非常严格，仅限于交我办软件访问。除非先获得官方支持，不然做不出来。”
+\end{quote}
+
+\subsection*{如果接入交我办，大模型怎么办？}
+
+三种可能的方案：\textbf{（1）致远一号}——交大已有的免费 LLM 平台，最直接的方案；\textbf{（2）学生自选 API Key}——费用透明、自主可控；\textbf{（3）学校统一采购}——为全校提供基础额度。我们倾向于方案 1 或 2，不对学校产生额外经费压力。
+
+\subsection*{关于部署：模块化安装}
+
+如果能接入学校平台，希望支持\textbf{模块化安装}——同学选择自己需要的功能，系统自动拉起对应服务，不强制全装。
+
+% ── 三、已做了什么 ──
+\section{已经做了什么}
+
+\subsection*{已接入的校园数据源}
+
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{数据源} & \textbf{获取方式} \\
+\midrule
+Canvas LMS & API（需用户手动获取 Token）\\
+教学信息服务网 & 模拟登录 + 爬虫 \\
+物理实验平台 phycai & 模拟登录 + 爬虫 \\
+中国大学 MOOC / AI 好课 & 模拟登录 + 爬虫 \\
+campuslife API & \textbf{公开接口（无需认证）}\\
+教务处通知 & 网页抓取 \\
+水源社区 & 网页抓取 \\
+交大邮箱 & IMAP（readonly）\\
+\bottomrule
+\end{tabularx}
+
+\subsection*{飞书 Bot 主要命令}
+
+\begin{verbatim}
+/eat        实时拥挤度 + 个性化食堂推荐 + 偏好学习
+/news       校园新闻 AI 摘要（教务处+水源+交大新闻网+Canvas）
+/hw do 3    下载并分析第 3 个作业（Canvas → LLM → 解答）
+/hw due 7   查看 7 天内截止的 DDL（四平台聚合）
+/template bachelor-thesis   一键套用 SJTU 毕业论文 LaTeX 模板
+/aihot      今日 AI 圈精选新闻
+\end{verbatim}
+
+% ── 四、对学校的价值 ──
+\section{对学校的价值}
+
+\begin{enumerate}[itemsep=4pt]
+    \item \textbf{零成本试水 AI 校园服务}——项目已完成开发，学校无需投入研发资源
+    \item \textbf{学生真实需求驱动}——每个功能都来自日常痛点
+    \item \textbf{技术栈成熟可控}——纯 Python，MIT 开源，数据本地存储，代码可审计
+    \item \textbf{已有用户基础和口碑}——69 Stars，11 Forks，多个学院同学在使用
+    \item \textbf{社区贡献活跃}——45 天 5 位贡献者，20+ PR，12 次发布
+\end{enumerate}
+
+% ── 五、底线 ──
+\section{我们的底线}
+
+\begin{enumerate}[itemsep=6pt]
+    \item \textbf{目标是方便同学，不是妨碍或越界。}不做考勤监控、不做行为分析、不推送广告。所有功能以“帮同学省时间”为唯一标准。
+
+    \item \textbf{保障知情权，但保留完全主动权。}Bot 告诉同学“今天有 3 个 DDL 截止”——但不替同学做决定。所有选项掌握在学生自己手里。
+
+    \item \textbf{数据主权在学生。}当前所有数据存储在本地。如果未来接入学校平台，我们同样坚持：学生可以随时导出、删除自己的数据，可以选择不参与任何数据收集。
+\end{enumerate}
+
+% ── 六、下一步 ──
+\section{下一步}
+
+我们不是来要经费的。只是想约一个时间，和信息化办公室的老师聊聊——展示一下我们在做什么，听听老师的建议，探讨一下有没有合作的可能。
+
+\vspace{1em}
+\begin{center}
+\href{https://github.com/kuan-er/sjtu-agent}{github.com/kuan-er/sjtu-agent}
+\end{center}
+
+\end{document}
