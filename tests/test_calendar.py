@@ -38,6 +38,21 @@ class TestHolidays:
         _, name = cal.is_holiday(_dt.date(2026, 4, 4))
         assert name == "清明节"
 
+    def test_anniversary(self, cal):
+        is_hol, name = cal.is_holiday(_dt.date(2026, 4, 7))
+        assert is_hol is True
+        assert "校庆" in name
+
+    def test_mid_autumn(self, cal):
+        is_hol, name = cal.is_holiday(_dt.date(2026, 9, 25))
+        assert is_hol is True
+        assert "中秋" in name
+
+    def test_national_day(self, cal):
+        is_hol, name = cal.is_holiday(_dt.date(2026, 10, 1))
+        assert is_hol is True
+        assert "国庆" in name
+
 
 class TestMakeupDays:
     def test_labor_makeup(self, cal):
@@ -48,6 +63,21 @@ class TestMakeupDays:
     def test_not_makeup(self, cal):
         is_mk, _ = cal.is_makeup_day(_dt.date(2026, 5, 10))
         assert is_mk is False
+
+    def test_anniversary_makeup(self, cal):
+        is_mk, note = cal.is_makeup_day(_dt.date(2026, 4, 11))
+        assert is_mk is True
+        assert "周二" in note
+
+    def test_national_makeup_sep(self, cal):
+        is_mk, note = cal.is_makeup_day(_dt.date(2026, 9, 20))
+        assert is_mk is True
+        assert "周五" in note
+
+    def test_national_makeup_oct(self, cal):
+        is_mk, note = cal.is_makeup_day(_dt.date(2026, 10, 10))
+        assert is_mk is True
+        assert "周二" in note
 
 
 class TestContext:
@@ -78,6 +108,10 @@ class TestSemester:
     def test_summer_semester(self, cal):
         sem = cal.get_semester(_dt.date(2026, 7, 10))
         assert sem == "2025-2026-3"
+
+    def test_autumn_semester(self, cal):
+        sem = cal.get_semester(_dt.date(2026, 10, 1))
+        assert sem == "2026-2027-1"
 
     def test_summer_no_holidays(self, cal):
         is_hol, _ = cal.is_holiday(_dt.date(2026, 7, 10))
