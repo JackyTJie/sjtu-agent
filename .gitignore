@@ -32,6 +32,10 @@ assignments_test_aihaoke/
 build/
 *.egg-info/
 
+# LaTeX auxiliary files
+*.aux
+*.out
+
 # Local launchd output and logs
 com.sjtu.*.plist
 *.log
