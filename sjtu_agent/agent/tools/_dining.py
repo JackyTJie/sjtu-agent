@@ -247,26 +247,40 @@ def tool_get_canteen_crowd(campus: str = "", canteen_id: int = 0) -> dict:
         if not detail["ok"]:
             return {"ok": False, "error": detail.get("error", "获取失败")}
         d = detail["detail"]
+
+        def _sub_info(s: dict) -> dict:
+            """Extract sub-area info, treating rate=0 as no-data."""
+            rates = s.get("curRates")
+            if not rates:
+                return {
+                    "name": s.get("name", "?"),
+                    "is_open": bool(s.get("isOpen")),
+                    "close_desc": s.get("closeDesc") or "",
+                    "current_rate": None,
+                    "current_label": "无数据",
+                }
+            rate = rates[-1]["rate"]
+            if rate == 0:
+                return {
+                    "name": s.get("name", "?"),
+                    "is_open": bool(s.get("isOpen")),
+                    "close_desc": s.get("closeDesc") or "",
+                    "current_rate": None,
+                    "current_label": "无数据",
+                }
+            return {
+                "name": s.get("name", "?"),
+                "is_open": bool(s.get("isOpen")),
+                "close_desc": s.get("closeDesc") or "",
+                "current_rate": round(rate, 1),
+                "current_label": _crowd_label(rate),
+            }
+
         return {
             "ok": True,
             "canteen_id": canteen_id,
             "schedule_desc": d.get("scheduleDesc", ""),
-            "subs": [
-                {
-                    "name": s.get("name", "?"),
-                    "is_open": bool(s.get("isOpen")),
-                    "close_desc": s.get("closeDesc") or "",
-                    "current_rate": (
-                        round(s["curRates"][-1]["rate"], 1)
-                        if s.get("curRates") else None
-                    ),
-                    "current_label": (
-                        _crowd_label(s["curRates"][-1]["rate"])
-                        if s.get("curRates") else "无数据"
-                    ),
-                }
-                for s in d.get("subs", [])
-            ],
+            "subs": [_sub_info(s) for s in d.get("subs", [])],
         }
 
     # Return all canteens overview
