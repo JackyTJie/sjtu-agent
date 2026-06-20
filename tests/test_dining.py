@@ -675,6 +675,118 @@ class TestToolGetCanteenCrowd:
         r = tool_get_canteen_crowd()
         assert r["ok"] is False
 
+    def test_overview_rate_zero_treated_as_no_data(self, monkeypatch):
+        """A canteen sub-area with rate=0 should appear as '无数据', not '空闲'."""
+        fake = FakeCanteenCrowdChecker()
+        monkeypatch.setattr(
+            "sjtu_agent.data.canteen_crowd.CanteenCrowdChecker",
+            lambda: fake,
+        )
+        from sjtu_agent.agent.tools._dining import tool_get_canteen_crowd
+        r = tool_get_canteen_crowd(canteen_id=300)
+        assert r["ok"] is True
+        for sub in r["subs"]:
+            if sub["current_rate"] is None:
+                assert sub["current_label"] == "无数据"
+
+    def test_detail_rate_zero_treated_as_no_data(self, monkeypatch):
+        """tool_get_canteen_crowd detail path: rate=0 → None + '无数据'."""
+        fake = FakeCanteenCrowdChecker()
+        monkeypatch.setattr(
+            "sjtu_agent.data.canteen_crowd.CanteenCrowdChecker",
+            lambda: fake,
+        )
+        from sjtu_agent.agent.tools._dining import tool_get_canteen_crowd
+        r = tool_get_canteen_crowd(canteen_id=300)
+        assert r["ok"] is True
+        for sub in r["subs"]:
+            if sub["current_rate"] is None:
+                assert sub["current_label"] == "无数据"
+
+
+class TestCanteenCrowdCheckerGetAllCrowd:
+    """Direct tests for CanteenCrowdChecker.get_all_crowd() with mocked HTTP."""
+
+    def test_rate_zero_sub_area_is_no_data(self, monkeypatch):
+        """Sub-area with curRates=[{rate:0}] → current_rate=None, label='无数据'."""
+        from sjtu_agent.data.canteen_crowd import CanteenCrowdChecker
+
+        def mock_get_all_canteens(self):
+            return {
+                "ok": True,
+                "canteens": [{"id": 100, "name": "第一餐饮大楼", "campus": "闵行", "isOpen": True}],
+            }
+
+        def mock_get_canteen_detail(self, canteen_id):
+            return {
+                "ok": True,
+                "detail": {
+                    "scheduleStatus": 1,
+                    "scheduleDesc": "午餐",
+                    "subs": [
+                        {
+                            "name": "一楼餐厅",
+                            "isOpen": False,
+                            "closeDesc": "",
+                            "curRates": [{"rate": 0, "time": "2026-06-20 12:00:00"}],
+                        },
+                    ],
+                },
+            }
+
+        monkeypatch.setattr(CanteenCrowdChecker, "get_all_canteens", mock_get_all_canteens)
+        monkeypatch.setattr(CanteenCrowdChecker, "get_canteen_detail", mock_get_canteen_detail)
+
+        checker = CanteenCrowdChecker()
+        result = checker.get_all_crowd()
+        assert result["ok"] is True
+        assert len(result["canteens"]) == 1
+        c = result["canteens"][0]
+        assert len(c["subs"]) == 1
+        sub = c["subs"][0]
+        assert sub["current_rate"] is None
+        assert sub["current_label"] == "无数据"
+        assert c["overall_rate"] is None
+        assert c["overall_label"] == "非就餐时间"
+
+    def test_rate_zero_with_open_sub_area_treated_as_no_data(self, monkeypatch):
+        """Even when isOpen=True, rate=0 should still be treated as no-data."""
+        from sjtu_agent.data.canteen_crowd import CanteenCrowdChecker
+
+        def mock_get_all_canteens(self):
+            return {
+                "ok": True,
+                "canteens": [{"id": 100, "name": "第一餐饮大楼", "campus": "闵行", "isOpen": True}],
+            }
+
+        def mock_get_canteen_detail(self, canteen_id):
+            return {
+                "ok": True,
+                "detail": {
+                    "scheduleStatus": 1,
+                    "scheduleDesc": "午餐",
+                    "subs": [
+                        {
+                            "name": "一楼餐厅",
+                            "isOpen": True,
+                            "closeDesc": "",
+                            "curRates": [{"rate": 0, "time": "2026-06-20 12:00:00"}],
+                        },
+                    ],
+                },
+            }
+
+        monkeypatch.setattr(CanteenCrowdChecker, "get_all_canteens", mock_get_all_canteens)
+        monkeypatch.setattr(CanteenCrowdChecker, "get_canteen_detail", mock_get_canteen_detail)
+
+        checker = CanteenCrowdChecker()
+        result = checker.get_all_crowd()
+        assert result["ok"] is True
+        c = result["canteens"][0]
+        sub = c["subs"][0]
+        assert sub["current_rate"] is None
+        assert sub["current_label"] == "无数据"
+
 
 class TestToolRecommendCanteen:
     """tool_recommend_canteen combines crowd + history + knowledge."""

@@ -159,6 +159,21 @@ class CanteenCrowdChecker:
                 current_rate = latest["rate"]
                 current_time = _parse_time(latest["time"])
 
+                # A rate of 0 is almost certainly "no data" (closed / not yet
+                # serving / sensor offline), not genuinely empty.  Treat it as
+                # unknown so we don't report "空闲" for a closed canteen.
+                if current_rate == 0:
+                    subs.append({
+                        "name": sub.get("name", "?"),
+                        "is_open": bool(sub.get("isOpen")),
+                        "close_desc": sub.get("closeDesc") or "",
+                        "current_rate": None,
+                        "current_label": "无数据",
+                        "trend": "—",
+                        "last_updated": latest["time"],
+                    })
+                    continue
+
                 # Trend: compare with 10 min ago
                 trend = "—"
                 if len(rates) >= 10:
