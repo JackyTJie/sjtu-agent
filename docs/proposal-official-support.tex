@@ -7,6 +7,8 @@
 \usepackage{enumitem}
 \usepackage{tabularx}
 \usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
 
 \hypersetup{
     colorlinks=true, linkcolor=blue, urlcolor=blue,
@@ -113,13 +115,25 @@ campuslife API & \textbf{公开接口（无需认证）}\\
 \subsection*{飞书 Bot 主要命令}
 
 \begin{verbatim}
-/eat       实时拥挤度 + 个性化食堂推荐 + 偏好学习
-/news      校园新闻 AI 摘要
-/hw do 3   下载并分析第 3 个作业（Canvas → LLM → 解答）
-/hw due 7  查看 7 天内截止的 DDL（四平台聚合）
-/template  一键套用 SJTU 毕业论文 LaTeX 模板
-/aihot     今日 AI 圈精选新闻
+/eat     实时拥挤度 + 个性化食堂推荐 + 偏好学习
+/news    校园新闻 AI 摘要
+/hw do 3 下载并分析第 3 个作业（Canvas → LLM → 解答）
+/template 一键套用 SJTU 毕业论文 LaTeX 模板
+/aihot   今日 AI 圈精选新闻
 \end{verbatim}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.48\textwidth]{docs/images/feishu-eat.png}\hfill
+\includegraphics[width=0.48\textwidth]{docs/images/feishu-news.png}
+\caption{\small \texttt{/eat} 食堂推荐（左）与 \texttt{/news} 校园新闻（右）}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{docs/images/arch-diagram.png}
+\caption{\small 系统架构：校园数据源 → SJTU Agent → 飞书/微信/QQ}
+\end{figure}
 
 \section{对学校的价值}
 
