@@ -330,11 +330,11 @@ class TestCrowdLabel:
 
     @pytest.mark.parametrize("rate,expected", [
         (0, "空闲"),
-        (5, "适中"),
-        (20, "较挤"),
-        (35, "拥挤"),
-        (55, "爆满"),
-        (80, "爆满"),
+        (5, "空闲"),
+        (20, "适中"),
+        (35, "较挤"),
+        (55, "拥挤"),
+        (65, "爆满"),
         (100, "爆满"),
     ])
     def test_crowd_label_thresholds(self, rate, expected):

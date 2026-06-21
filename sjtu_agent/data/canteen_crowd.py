@@ -50,12 +50,12 @@ CANTEEN_CAMPUS: dict[int, str] = {
     1000: "徐汇", 1200: "张江",
 }
 
-# Crowd level thresholds
+# Crowd level thresholds — upper bounds for each label
 CROWD_LEVELS = [
-    (0,    "空闲"),
-    (15,   "适中"),
-    (30,   "较挤"),
-    (50,   "拥挤"),
+    (10,   "空闲"),
+    (25,   "适中"),
+    (40,   "较挤"),
+    (60,   "拥挤"),
     (float("inf"), "爆满"),
 ]
 
